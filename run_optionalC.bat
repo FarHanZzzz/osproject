@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0OptionalC_WIN32Driver"
 
 echo ================================================================================
@@ -7,58 +7,42 @@ echo    [OPTIONAL C] Building WIN32 Kernel-Mode Driver
 echo ================================================================================
 echo.
 
-REM Set up MSVC environment
+REM ── Set up MSVC environment ──
 call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Visual Studio Build Tools not found.
-    echo Please install VS2019 or VS2022 Build Tools.
-    exit /b 1
-)
+if !errorlevel! neq 0 goto :no_vs
 
-set WDK_INC=C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0
-set WDK_LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0
+REM ── WDK paths (quoted to handle parentheses) ──
+set "WDK_INC=C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0"
+set "WDK_LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0"
 
-REM Verify WDK is installed
-if not exist "%WDK_INC%\km\ntddk.h" (
-    echo ERROR: Windows Driver Kit [WDK] not found!
-    echo Expected: %WDK_INC%\km\ntddk.h
-    echo.
-    echo Install WDK with:
-    echo   winget install Microsoft.WindowsWDK.10.0.19041
-    exit /b 1
-)
+REM ── Verify WDK is installed ──
+if not exist "!WDK_INC!\km\ntddk.h" goto :no_wdk
 
-REM Clean previous build
+REM ── Clean previous build ──
 del /f driver.obj driver.sys 2>nul
 
-REM Step 1: Compile
+REM ── Step 1: Compile ──
 echo [1/2] Compiling driver.c (kernel mode)...
 cl /nologo /W4 /WX- /kernel /GS- /Gz /Oi ^
    /D _WIN64 /D _AMD64_ /D AMD64 ^
    /D NTDDI_VERSION=0x0A000007 ^
-   /I "%WDK_INC%\km" ^
-   /I "%WDK_INC%\shared" ^
-   /I "%WDK_INC%\um" ^
+   /I "!WDK_INC!\km" ^
+   /I "!WDK_INC!\shared" ^
+   /I "!WDK_INC!\um" ^
    /c driver.c /Fo:driver.obj >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Compilation failed!
-    exit /b 1
-)
+if !errorlevel! neq 0 goto :compile_fail
 echo       Compiled successfully: driver.obj
 echo.
 
-REM Step 2: Link
+REM ── Step 2: Link ──
 echo [2/2] Linking driver.sys (NATIVE subsystem)...
 link /nologo /DRIVER /SUBSYSTEM:NATIVE /ENTRY:DriverEntry ^
      /OUT:driver.sys ^
-     /LIBPATH:"%WDK_LIB%\km\x64" ^
-     /LIBPATH:"%WDK_LIB%\um\x64" ^
+     /LIBPATH:"!WDK_LIB!\km\x64" ^
+     /LIBPATH:"!WDK_LIB!\um\x64" ^
      ntoskrnl.lib hal.lib wmilib.lib ^
      driver.obj >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Linking failed!
-    exit /b 1
-)
+if !errorlevel! neq 0 goto :link_fail
 echo       Linked successfully: driver.sys
 echo.
 
@@ -98,4 +82,28 @@ echo           sc delete myDriver
 echo.
 echo   WARNING: Test in a Virtual Machine! A kernel bug = Blue Screen of Death.
 echo ================================================================================
+goto :done
+
+:no_vs
+echo ERROR: Visual Studio Build Tools not found.
+echo Please install VS2019 or VS2022 Build Tools.
+exit /b 1
+
+:no_wdk
+echo ERROR: Windows Driver Kit [WDK] not found!
+echo Expected: !WDK_INC!\km\ntddk.h
+echo.
+echo Install WDK with:
+echo   winget install Microsoft.WindowsWDK.10.0.19041
+exit /b 1
+
+:compile_fail
+echo ERROR: Compilation failed!
+exit /b 1
+
+:link_fail
+echo ERROR: Linking failed!
+exit /b 1
+
+:done
 endlocal
