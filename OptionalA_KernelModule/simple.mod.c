@@ -33,6 +33,7 @@ __used __section("__version_ext_crcs") = {
 	0x15de3876,
 	0xbebe66ff,
 };
+
 static const char ____version_ext_names[]
 __used __section("__version_ext_names") =
 	"__fentry__\0"
