@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0OptionalC_WIN32Driver"
 
 echo ================================================================================
-echo >>> [OPTIONAL C] Building WIN32 Kernel-Mode Driver
+echo    [OPTIONAL C] Building WIN32 Kernel-Mode Driver
 echo ================================================================================
 echo.
 
@@ -20,7 +20,7 @@ set WDK_LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0
 
 REM Verify WDK is installed
 if not exist "%WDK_INC%\km\ntddk.h" (
-    echo ERROR: Windows Driver Kit (WDK) not found!
+    echo ERROR: Windows Driver Kit [WDK] not found!
     echo Expected: %WDK_INC%\km\ntddk.h
     echo.
     echo Install WDK with:
@@ -63,24 +63,24 @@ echo       Linked successfully: driver.sys
 echo.
 
 echo ================================================================================
-echo >>> [OPTIONAL C] Build completed successfully!
+echo    [OPTIONAL C] Build completed successfully!
 echo ================================================================================
 echo.
 echo   Output: %cd%\driver.sys
 echo.
 echo ================================================================================
-echo >>> HOW TO LOAD AND TEST THE DRIVER
+echo    HOW TO LOAD AND TEST THE DRIVER
 echo ================================================================================
 echo.
 echo   STEP 1: Disable Driver Signature Enforcement
 echo           Shift + Click "Restart" in the Start Menu
-echo           Troubleshoot ^> Advanced Options ^> Startup Settings ^> Restart
+echo           Troubleshoot -- Advanced Options -- Startup Settings -- Restart
 echo           Press F7: "Disable driver signature enforcement"
 echo.
 echo   STEP 2: Open DebugView (Sysinternals) as Administrator
 echo           Download: https://learn.microsoft.com/en-us/sysinternals/downloads/debugview
-echo           Enable: Capture ^> Capture Kernel
-echo           Enable: Capture ^> Enable Verbose Kernel Output
+echo           Enable: Capture -- Capture Kernel
+echo           Enable: Capture -- Enable Verbose Kernel Output
 echo.
 echo   STEP 3: Open an Administrator Command Prompt and run:
 echo.
