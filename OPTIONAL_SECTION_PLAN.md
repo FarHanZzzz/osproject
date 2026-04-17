@@ -1,0 +1,508 @@
+# Optional Section — Analysis & Implementation Plan
+## CSC413/CSE315 — OS Programming Assignment, Spring 2026
+
+> [!IMPORTANT]
+> **Only attempt the optional section AFTER the mandatory section is complete.**
+> Answering **any ONE problem** is sufficient — but all three are analysed here.
+> Group submissions are allowed for optional tasks (list all student names clearly).
+
+---
+
+## Overview of Optional Tasks
+
+| # | Task | Platform | Difficulty | Effort Est. |
+|---|------|----------|------------|-------------|
+| A | Linux Kernel Module (GOLDEN_RATIO_PRIME + GCD) | Linux | ⭐⭐⭐ Medium | 3–5 hours |
+| B | Java RMI Extension of a past OOP project | Linux/Windows | ⭐⭐⭐⭐ Hard | 8–15 hours |
+| C | WIN32 Kernel-Mode Driver (DbgPrint + ZwCreateFile) | Windows only | ⭐⭐⭐⭐⭐ Extreme | 10–20 hours |
+
+> [!TIP]
+> **Recommended order**: A → B → C.
+> Task A is achievable on your current Linux setup, requires no prior kernel experience beyond following
+> the exact steps given, and gives the best marks-to-effort ratio.
+> Task B reuses your existing Java codebase — less new learning, more integration.
+> Task C is Windows-only, deeply low-level, and intentionally marked "no support provided."
+
+---
+
+## Optional A — Linux Kernel Module
+
+### What the Task Asks
+
+1. **Part 1 (Walkthrough):** Follow the textbook steps to create, compile, load, and unload a basic
+   "Hello Kernel" module (`simple.c`) and verify with `dmesg`.
+
+2. **Part 2 (Deliverable):** Write a custom kernel module that:
+   - In `module_init()` → prints `GOLDEN_RATIO_PRIME` (from `<linux/hash.h>`)
+   - In `module_exit()` → prints `gcd(3700, 24)` (from `<linux/gcd.h>`)
+   - Provide the `.c` source file, Makefile, and a written report.
+
+### Why This Is Feasible (and the Best Choice)
+
+- **You are already on Linux** — no VM or dual-boot needed.
+- The kernel module API is well-documented and the exact code structure is given in the PDF.
+- `GOLDEN_RATIO_PRIME` and `gcd()` are simple one-liner calls.
+- The hardest part is getting the Makefile right — but the pattern is standard.
+
+### How It Works — OS Concepts
+
+```
+User Space                │  Kernel Space
+──────────────────────────│──────────────────────────────
+gcc / make                │  insmod → calls module_init()
+$ sudo dmesg              │  printk() → writes to ring buffer
+$ sudo rmmod              │  calls module_exit()
+```
+
+- **Kernel space vs. user space**: Modules run with full hardware access; bugs can crash the system.
+- **`printk()` vs `printf()`**: Output goes to the kernel ring buffer (read via `dmesg`), not stdout.
+- **Dynamic kernel extensions**: Modules can be loaded/unloaded without rebooting the kernel.
+- **`KERN_INFO` priority**: One of 8 log levels (`KERN_EMERG` … `KERN_DEBUG`).
+
+### Implementation Plan
+
+#### File: `OptionalA_KernelModule/simple.c`
+
+```c
+#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/hash.h>   // GOLDEN_RATIO_PRIME
+#include <linux/gcd.h>    // gcd()
+
+int simple_init(void) {
+    printk(KERN_INFO "Loading Module.\n");
+    printk(KERN_INFO "GOLDEN_RATIO_PRIME = %lu\n", GOLDEN_RATIO_PRIME);
+    return 0;
+}
+
+void simple_exit(void) {
+    printk(KERN_INFO "Removing Module.\n");
+    printk(KERN_INFO "GCD(3700, 24) = %lu\n", gcd(3700, 24));
+}
+
+module_init(simple_init);
+module_exit(simple_exit);
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("OS Assignment - Kernel Module Demo");
+MODULE_AUTHOR("Your Name");
+```
+
+#### File: `OptionalA_KernelModule/Makefile`
+
+```makefile
+obj-m += simple.o
+
+all:
+    make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+
+clean:
+    make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+```
+
+> [!WARNING]
+> The Makefile **must use a TAB character** (not spaces) before `make -C ...`.
+> This is the single most common reason kernel module compilation fails for beginners.
+
+#### Commands to Run (in order)
+
+```bash
+# 1. Install kernel headers if not present
+sudo apt install linux-headers-$(uname -r)
+
+# 2. Compile
+cd OptionalA_KernelModule/
+make
+
+# 3. Verify .ko was created
+ls -lh simple.ko
+
+# 4. Load the module
+sudo insmod simple.ko
+
+# 5. Verify it loaded and check output
+lsmod | grep simple
+sudo dmesg | tail -5          # should show GOLDEN_RATIO_PRIME value
+
+# 6. Unload the module
+sudo rmmod simple
+
+# 7. Verify GCD output on exit
+sudo dmesg | tail -5          # should show GCD(3700, 24) = 4
+
+# 8. Clear the buffer (optional)
+sudo dmesg -c
+```
+
+#### Expected Output
+
+```
+[dmesg after insmod]
+  Loading Module.
+  GOLDEN_RATIO_PRIME = 11400714819323198485   ← (64-bit value on x86_64)
+
+[dmesg after rmmod]
+  Removing Module.
+  GCD(3700, 24) = 4
+```
+
+> GCD(3700, 24): 3700 = 4 × 925, 24 = 4 × 6 → **GCD = 4** ✓
+
+### Deliverables Checklist
+
+- [ ] `simple.c` — kernel module source
+- [ ] `Makefile` — kernel build system Makefile
+- [ ] `simple.ko` — compiled module (generated by `make`, include in zip)
+- [ ] `report.md` or `report.pdf` — explains: kernel space vs user space, dynamic kernel extensions, implementation steps, challenges, testing procedure
+- [ ] Screenshot / terminal log of `dmesg` output after `insmod` and `rmmod`
+
+### Report Talking Points
+
+1. **Kernel space vs. user space**: Kernel code runs in ring 0 (full privilege); user programs in ring 3 (restricted). Modules bypass normal OS protections — a NULL pointer dereference in a module causes a kernel panic (not just a segfault).
+2. **Dynamic kernel extensions**: `insmod`/`rmmod` modify the live kernel without rebooting. The `module_init`/`module_exit` hooks are registered via macro magic that inserts function pointers into the kernel's module table.
+3. **`printk` and the ring buffer**: The kernel maintains a circular log buffer. `dmesg` reads from it. Unlike `printf`, there is no concept of a "terminal" — output goes to `/dev/kmsg`.
+4. **`GOLDEN_RATIO_PRIME`**: A near-optimal multiplicative hash constant derived from the golden ratio φ = (√5−1)/2 scaled to 64-bit integers. Used internally by the kernel's hash tables.
+5. **Challenges**: Forgetting `MODULE_LICENSE("GPL")` causes a build warning. Using `printf` instead of `printk` will fail to compile. The Makefile must use tabs.
+
+---
+
+## Optional B — Java RMI Extension
+
+### What the Task Asks
+
+Take a **previous Java GUI project** (from CSE213/CSC305 OOP course) and extend it with **RMI (Remote Method Invocation)** or **RPC (Remote Procedure Call)** so that:
+
+1. Some methods are no longer executed on the client — they are offloaded to a remote server.
+2. You must **justify** which methods belong on the server (security-sensitive or compute-intensive).
+3. You must **demonstrate** the RMI calls running across client and server.
+
+### Feasibility Analysis
+
+This task depends entirely on what your past OOP project was. You need:
+- A working Java project from CSE213/CSC305.
+- Java RMI knowledge (part of the standard JDK — no extra libraries needed).
+- Ability to run a server locally or on a second machine/terminal.
+
+> [!NOTE]
+> Java RMI is part of `java.rmi.*` in the standard JDK. You do NOT need Spring, REST, or any framework.
+> The server and client can both run on `localhost` for the demo.
+
+### What Makes a Method a Good RMI Candidate?
+
+| Justification | Example Methods |
+|---------------|-----------------|
+| **Security-sensitive** — should not exist in client binary | Login/authentication, password hashing, token generation, encryption keys |
+| **Data-sensitive** — works with private data | Database queries, billing records, medical records |
+| **Compute-intensive** — impractical on a thin client | Image processing, ML inference, large report generation |
+| **Shared state** — multiple clients need the same resource | Inventory counter, seat reservation, shared score board |
+
+### Architecture
+
+```
+Client (Java GUI)                     Server (RMI Registry)
+─────────────────────────────────     ──────────────────────────────
+GUI → calls stub.remoteMethod()  ───► Skeleton → actual implementation
+         ↑                                        ↓
+         └──── receives return value ─────────────┘
+
+java.rmi.registry.LocateRegistry.createRegistry(1099)  ← server starts this
+java.rmi.Naming.lookup("rmi://localhost/MyService")    ← client connects
+```
+
+### Implementation Steps
+
+#### Step 1 — Define the Remote Interface
+
+```java
+// IMyService.java
+import java.rmi.Remote;
+import java.rmi.RemoteException;
+
+public interface IMyService extends Remote {
+    String authenticateUser(String username, String password) throws RemoteException;
+    double calculateComplexReport(int[] data) throws RemoteException;
+    // Add whatever fits your project
+}
+```
+
+#### Step 2 — Implement the Remote Interface (Server-Side)
+
+```java
+// MyServiceImpl.java
+import java.rmi.server.UnicastRemoteObject;
+import java.rmi.RemoteException;
+
+public class MyServiceImpl extends UnicastRemoteObject implements IMyService {
+    public MyServiceImpl() throws RemoteException { super(); }
+
+    @Override
+    public String authenticateUser(String username, String password) throws RemoteException {
+        // Sensitive logic stays on server — client never sees this code
+        if (username.equals("admin") && password.equals("secret")) return "AUTH_OK";
+        return "AUTH_FAIL";
+    }
+
+    @Override
+    public double calculateComplexReport(int[] data) throws RemoteException {
+        // Heavy computation on server
+        double sum = 0;
+        for (int d : data) sum += Math.pow(d, 3);
+        return sum;
+    }
+}
+```
+
+#### Step 3 — Server Main
+
+```java
+// Server.java
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
+import java.rmi.Naming;
+
+public class Server {
+    public static void main(String[] args) throws Exception {
+        MyServiceImpl service = new MyServiceImpl();
+        Registry registry = LocateRegistry.createRegistry(1099);
+        registry.rebind("MyService", service);
+        System.out.println("RMI Server running on port 1099...");
+    }
+}
+```
+
+#### Step 4 — Client Calls (Inside the GUI)
+
+```java
+// Inside your existing GUI code
+IMyService service = (IMyService) Naming.lookup("rmi://localhost/MyService");
+String result = service.authenticateUser(usernameField.getText(), passwordField.getText());
+```
+
+#### Step 5 — Run
+
+```bash
+# Terminal 1 — start server
+javac *.java
+java Server
+
+# Terminal 2 — start client GUI
+java YourGUIMainClass
+```
+
+### What to Submit
+
+- [ ] Modified Java project files (client + server split)
+- [ ] `IMyService.java` — remote interface
+- [ ] `MyServiceImpl.java` — server-side implementation
+- [ ] `Server.java` — RMI registry setup
+- [ ] A written justification: which methods were moved to RMI and why
+- [ ] A demonstration video or screenshot showing the RMI call working
+
+### Viva Talking Points
+
+1. **Why not just REST/HTTP?** RMI is Java-native, type-safe, and lets you pass real Java objects — no JSON serialisation needed.
+2. **Stub vs Skeleton**: The stub is a proxy on the client that looks like the real object. The skeleton (hidden in modern Java) forwards calls to the real implementation on the server.
+3. **`RemoteException`**: Every remote method must declare it — it wraps any network failure.
+4. **Registry (port 1099)**: The RMI naming service — clients look up objects by name, like a phone book.
+5. **Security justification**: Sensitive algorithms in a deployed `.jar` can be decompiled with tools like Jadx. Server-side RMI moves that code off the client binary entirely.
+
+---
+
+## Optional C — WIN32 Kernel-Mode Driver
+
+### What the Task Asks
+
+Write a Windows kernel-mode driver (`.sys` file) that:
+
+1. Prints `"Hello Kernel! <your name>"` via `DbgPrint()` on load
+2. Prints `"Goodbye Kernel!"` via `DbgPrint()` on unload
+3. **[EXTREMELY DIFFICULT]** Calls `ZwCreateFile()` + `ZwWriteFile()` to create a file from kernel mode
+
+### Honest Difficulty Assessment
+
+> [!CAUTION]
+> This is the hardest task in the entire assignment. The PDF explicitly states **"no support will be provided."**
+> Getting a kernel driver wrong can **blue-screen your machine**. The professor acknowledges this:
+> *"You are considered successful even if your system crashes."*
+> Only attempt this if you have a spare machine or a VM with snapshots.
+
+### Platform Requirements
+
+| Requirement | Tool |
+|-------------|------|
+| Windows 10/11 (64-bit) | Must disable driver signature enforcement at boot |
+| Compiler | Visual Studio 2019/2022 with **WDK (Windows Driver Kit)** installed |
+| Debug output viewer | **DebugView** (Sysinternals) — run as Administrator |
+| Alternative (lighter) | MinGW-w64 cross-compile from Linux (possible but painful) |
+
+### How to Disable Driver Signature Enforcement
+
+```
+Shift + Click "Restart" → Troubleshoot → Advanced Options →
+Startup Settings → Restart → Press F7 "Disable driver signature enforcement"
+```
+> [!WARNING]
+> This must be done **every boot** session. It is temporary — the next normal reboot re-enables signing.
+
+### Implementation Plan
+
+#### Driver Entry Point Structure
+
+```c
+// driver.c
+#include <ntddk.h>
+
+DRIVER_UNLOAD DriverUnload;
+void DriverUnload(PDRIVER_OBJECT DriverObject) {
+    UNREFERENCED_PARAMETER(DriverObject);
+    DbgPrint("Goodbye Kernel!\n");
+}
+
+NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
+    UNREFERENCED_PARAMETER(RegistryPath);
+    DriverObject->DriverUnload = DriverUnload;
+    DbgPrint("Hello Kernel! <Your Name>\n");
+    return STATUS_SUCCESS;
+}
+```
+
+#### Build with WDK (Visual Studio)
+
+1. Install **Visual Studio 2022** (Community is free)
+2. Install **Windows Driver Kit (WDK)** — must match your Windows SDK version
+3. Create a new project: `New Project → Driver → Empty WDM Driver`
+4. Add `driver.c`, set `DriverEntry` as entry point
+5. Build → produces `driver.sys`
+
+#### Loading the Driver (Admin CMD)
+
+```cmd
+sc create myDriver binPath= C:\path\to\driver.sys type= kernel
+sc start myDriver
+:: observe "Hello Kernel!" in DebugView
+sc stop myDriver
+:: observe "Goodbye Kernel!" in DebugView
+sc delete myDriver
+```
+
+#### DebugView Setup
+
+1. Download from: https://docs.microsoft.com/en-us/sysinternals/downloads/debugview
+2. Run as **Administrator** before `sc start`
+3. Enable: `Capture → Capture Kernel` + `Enable Verbose Kernel Output`
+
+### [EXTREMELY DIFFICULT] ZwCreateFile + ZwWriteFile
+
+This proves your driver runs in **kernel mode** (ring 0) by directly using NT native APIs:
+
+```c
+// Inside DriverEntry, after DbgPrint
+NTSTATUS status;
+HANDLE fileHandle;
+IO_STATUS_BLOCK ioStatusBlock;
+OBJECT_ATTRIBUTES objAttr;
+UNICODE_STRING fileName;
+
+RtlInitUnicodeString(&fileName, L"\\DosDevices\\C:\\kernel_test.txt");
+InitializeObjectAttributes(&objAttr, &fileName,
+    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+status = ZwCreateFile(&fileHandle,
+    GENERIC_WRITE, &objAttr, &ioStatusBlock,
+    NULL, FILE_ATTRIBUTE_NORMAL, 0, FILE_OVERWRITE_IF,
+    FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+
+DbgPrint("ZwCreateFile NTSTATUS = 0x%X\n", status);
+
+if (NT_SUCCESS(status)) {
+    CHAR data[] = "Written from kernel mode!\n";
+    status = ZwWriteFile(fileHandle, NULL, NULL, NULL, &ioStatusBlock,
+        data, sizeof(data) - 1, NULL, NULL);
+    DbgPrint("ZwWriteFile NTSTATUS = 0x%X\n", status);
+    DbgPrint("IO_STATUS_BLOCK.Information = %llu\n",
+        (unsigned long long)ioStatusBlock.Information);
+    ZwClose(fileHandle);
+}
+```
+
+> [!CAUTION]
+> If your system crashes during the ZwCreateFile attempt, you have **still demonstrated kernel-mode
+> execution** — the professor explicitly says this counts. Always use a VM with a snapshot.
+
+### What to Submit
+
+- [ ] `driver.c` — driver source code
+- [ ] Visual Studio project files (or Makefile if using cross-compilation)
+- [ ] `driver.sys` — compiled driver binary
+- [ ] DebugView screenshots showing "Hello Kernel!" and "Goodbye Kernel!" output
+- [ ] `report.md` — explain: what went wrong, compilation steps, challenges, what NTSTATUS codes mean
+- [ ] [Bonus] Screenshot showing `ZwCreateFile` NTSTATUS and `IO_STATUS_BLOCK` contents
+
+### Viva Talking Points
+
+1. **Why is driver signing needed?** Unsigned kernel code can install rootkits — Windows enforces WHQL signing as a security policy (Code Integrity).
+2. **`DbgPrint` vs `printf`**: DbgPrint writes to the kernel debug output buffer, consumed by a debugger or DebugView. There is no console in kernel mode.
+3. **`DriverEntry` vs `main`**: `DriverEntry` is the kernel's equivalent of `main` — but it runs in kernel space with a `DRIVER_OBJECT` and a registry path instead of argc/argv.
+4. **`NTSTATUS` codes**: Structured return codes (0x00000000 = STATUS_SUCCESS, 0xC... = error). Far richer than POSIX errno.
+5. **Ring 0 vs Ring 3**: Kernel-mode code runs in CPU privilege level 0 — no memory protection, direct hardware access, instant system crash on bad pointer.
+6. **Similarity to Linux kernel modules**: `DriverEntry` ↔ `module_init`, `DriverUnload` ↔ `module_exit`, `DbgPrint` ↔ `printk`, DebugView ↔ `dmesg`.
+
+---
+
+## My Recommendation
+
+Given your current setup (Linux), here is the priority order:
+
+```
+Priority 1 ── Optional A (Linux Kernel Module)
+              ✓ Already on Linux
+              ✓ Code is essentially given in the PDF
+              ✓ GCD(3700,24) = 4 — easy to verify
+              ✓ Highest marks-to-effort ratio
+              Est. time: 3–5 hours including report
+
+Priority 2 ── Optional B (Java RMI)
+              ✓ Needs your previous Java OOP project
+              ✓ Can run entirely on Linux (JDK is cross-platform)
+              ✓ Builds directly on OOP skills you already have
+              Est. time: 8–15 hours (depends on your existing project)
+
+Priority 3 ── Optional C (WIN32 Driver)
+              ✗ Windows only (no Linux path without pain)
+              ✗ No support provided by instructor
+              ✗ Risk of system crash
+              ✓ But impresses if done — proves deep OS knowledge
+              Est. time: 10–20 hours (with VM setup and crashes)
+```
+
+> [!NOTE]
+> **Start with Optional A immediately** — it is a natural next step from the mandatory section,
+> you are already in the right environment, and the kernel module folder (`OptionalA_KernelModule/`)
+> should be created in your project root alongside the mandatory task folders.
+
+---
+
+## Folder Structure to Create
+
+```
+Osproject/
+├── TaskA_WordCounter/          ✅ done
+├── TaskB_ElusiveCursor/        (Win32)
+├── TaskC_MatrixAdder/          ✅ done
+├── TaskD_MLQScheduler/         ✅ done
+├── TaskE_RealTimeScheduler/    ✅ done
+│
+├── OptionalA_KernelModule/     ← create this next
+│   ├── simple.c
+│   └── Makefile
+│
+├── OptionalB_JavaRMI/          ← needs your OOP project
+│   ├── IMyService.java
+│   ├── MyServiceImpl.java
+│   ├── Server.java
+│   └── [your existing GUI files]
+│
+└── OptionalC_WIN32Driver/      ← Windows only
+    ├── driver.c
+    └── [VS project files]
+```
