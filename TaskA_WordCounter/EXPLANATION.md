@@ -1,5 +1,9 @@
 # Task A: Word Counter (Concepts First!)
 
+> **Quick Overview:** This program counts words in two text files (`sample1.txt` and `sample2.txt`). It creates 2 child processes using `fork()`. Each child counts words in one file and sends the result back to the parent through a `pipe()`. The parent collects both counts and prints the total. **Key OS concept: Inter-Process Communication (IPC) using fork + pipe.**
+
+---
+
 Before diving into the code, let's understand the two massive Operating System concepts that make this program work: **Forking** and **Pipes**. 
 
 ---

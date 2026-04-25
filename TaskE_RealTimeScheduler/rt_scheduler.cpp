@@ -53,9 +53,8 @@ int main() {
     //   Task 3: Exec=1, Period=20  (runs every 20 ticks, needs 1 tick)
     //
     // Total Utilization = 2/5 + 4/10 + 1/20 = 0.4 + 0.4 + 0.05 = 0.85
-    // Since 0.85 <= 1.0, EDF can definitely schedule this.
-    // RM bound for 3 tasks = 3*(2^(1/3)-1) ≈ 0.78. Since 0.85 > 0.78,
-    // RM is NOT guaranteed (but might still work for this specific set).
+    // This means the CPU is 85% busy. EDF works if utilization <= 1.0 (it does!).
+    // RM might also work — let's simulate and find out!
     vector<Task> tasks = {
         {1, 2, 5,  0},   // Task 1
         {2, 4, 10, 0},   // Task 2
