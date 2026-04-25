@@ -1,129 +1,198 @@
-# Task E — Real-Time Scheduler
-## How the Code Works — Complete Explanation
+# ⏰ Task E — Real-Time Scheduler (ELI5 Edition)
 
-> **Source:** `rt_scheduler.cpp` | **Language:** C++ | **OS Concepts:** Real-time scheduling, RM, EDF, Schedulability, Hyperperiod
+## The Story
 
----
+Imagine you're a **juggler** 🤹 keeping 3 balls in the air:
+- 🔴 **Ball 1**: Must be caught and thrown every **5 seconds** (needs 2 sec to handle)
+- 🟡 **Ball 2**: Must be caught every **10 seconds** (needs 4 sec)
+- 🟢 **Ball 3**: Must be caught every **20 seconds** (needs 1 sec)
 
-## What This Program Does
+If you drop a ball (miss a deadline), the audience boos. The question is: **can you keep all 3 balls in the air without dropping any?**
 
-This program simulates Real-Time CPU scheduling for periodic tasks (tasks that must run repeatedly, like reading a sensor every 10ms). It features two scheduling algorithms:
-1. **Rate Monotonic (RM):** Static priority, where shorter periods = higher priority.
-2. **Earliest Deadline First (EDF):** Dynamic priority, where closest absolute deadline = higher priority.
-
-It also mathematically proves whether a task set is schedulable *before* running the simulation, and accurately simulates the tasks up to their hyperperiod to verify for missed deadlines.
-
-```
-Task Set: τ1(C=2,T=5), τ2(C=4,T=10), τ3(C=1,T=20)
-RM Schedulable: NO  (Total U=0.85 > Bound=0.7798)
-EDF Schedulable: YES
-```
+We test two juggling strategies:
+- **RM (Rate Monotonic)**: "Always catch the ball that comes back fastest" (Ball 1 > Ball 2 > Ball 3)
+- **EDF (Earliest Deadline First)**: "Always catch whichever ball is about to hit the ground soonest"
 
 ---
 
-## How It Works — Step by Step
+## 🔧 How to Run It
 
-### 1. Mathematical Pre-Check (Lines 110–152)
-
-```cpp
-double U = 0.0;
-for (auto &t : tasks) U += t.utilization;
-
-double rm_bound  = rm_utilisation_bound(n); // n*(2^(1/n)-1)
-double edf_bound = 1.0;
+```bash
+g++ -o rt_scheduler rt_scheduler.cpp
+./rt_scheduler
 ```
 
-Before simulating, we calculate CPU Utilization ($U = \sum \frac{C_i}{T_i}$). 
-- For EDF, the CPU just needs to be $\le 100\%$ ($1.0$). 
-- For RM, Liu and Layland proved a specific mathematical bound. For 3 tasks, this bound is $\approx 0.7798$. 
+---
 
-Our test case has a utilization of $0.85$, so we mathematically warn the user that RM *might* fail.
+## 📖 Code Walkthrough — The Fun Version
 
-### 2. The Hyperperiod Calculation (Lines 90–96)
+### Part 1: The Balls (Task Struct)
 
 ```cpp
-static int compute_hyper_period(const std::vector<Task> &tasks) {
-    long long hp = 1;
-    for (auto &t : tasks) hp = lcm_ll(hp, (long long)t.period);
-    return (int)hp;
+struct Task {
+    int    id;                  // Ball 1, 2, or 3
+    double exec_time;           // How long to handle it (Ci)
+    double period;              // How often it comes back (Ti)
+    double deadline;            // Must finish before this (= period)
+    double utilization;         // Ci/Ti = how much of your time it uses
+
+    double remaining;           // Time left handling current catch
+    double absolute_deadline;   // "This ball hits the ground at tick 15"
+    bool   ready;               // "Is this ball in the air right now?"
+    int    static_priority;     // For RM: fastest ball = highest priority
+
+    int completed;              // Times successfully caught
+    int missed;                 // Times DROPPED 😱
+};
+```
+
+**The test balls (from the assignment PDF):**
+
+| Ball | Handle Time (Ci) | Comes Every (Ti) | Uses % of you (Ci/Ti) |
+|------|:-:|:-:|:-:|
+| 🔴 Ball 1 | 2 | 5 | 40% |
+| 🟡 Ball 2 | 4 | 10 | 40% |
+| 🟢 Ball 3 | 1 | 20 | 5% |
+| **Total** | | | **85%** |
+
+You need 85% of your time just to handle all 3 balls. That leaves only 15% idle time. Tight!
+
+---
+
+### Part 2: Can You Even Do This? (Schedulability Check)
+
+```cpp
+// RM bound: n * (2^(1/n) - 1)
+double rm_limit = 3 * (pow(2.0, 1.0/3.0) - 1.0);    // ≈ 0.779 = 77.9%
+
+// EDF bound: always 1.0 = 100%
+double edf_limit = 1.0;
+```
+
+🧮 **Before juggling, we do MATH to see if it's even possible:**
+
+**RM check:** "Can RM handle 85% utilization?" The RM bound for 3 balls ≈ 77.9%. Since 85% > 77.9%, the math says **"NOT GUARANTEED"**. But here's the twist — this is a conservative test. RM might still work, just no guarantee. Think of it like a speed limit: the sign says 80 km/h, but some cars can safely go 85.
+
+**EDF check:** "Can EDF handle 85%?" EDF's bound is 100%. Since 85% < 100%, **EDF is guaranteed to work.** EDF is just better at juggling! 🏆
+
+---
+
+### Part 3: What's a Hyperperiod?
+
+```cpp
+int compute_hyperperiod(vector<Task> &tasks) {
+    // LCM of all periods
+    // LCM(5, 10, 20) = 20
 }
 ```
 
-We don't need to simulate to infinity. Because periodic tasks follow a repeating pattern, the entire system state resets perfectly after the Least Common Multiple (LCM) of all periods. For $T = {5, 10, 20}$, the LCM is $20$. We only need to simulate 20 ticks.
+🔄 **The hyperperiod = when everything lines up again.** Ball 1 comes every 5, Ball 2 every 10, Ball 3 every 20. After 20 ticks, ALL three balls arrive at the same time again — exactly like tick 0. So the pattern repeats every 20 ticks. We only need to simulate 20 ticks to see the complete picture!
 
-### 3. Task Activation (Lines 158–167)
+**LCM (Least Common Multiple):** The smallest number divisible by all periods. LCM(5, 10, 20) = 20.
+
+---
+
+### Part 4: Balls Arriving (Activation)
 
 ```cpp
-if (tick % (int)t.period == 0) {
-    t.ready             = true;
-    t.remaining_time    = t.exec_time;
-    t.absolute_deadline = tick + t.period;
+void activate_tasks(vector<Task> &tasks, int tick) {
+    for (auto &t : tasks) {
+        if (tick % (int)t.period == 0) {       // "Is it time for this ball?"
+            t.ready = true;                     // "Ball is in the air!"
+            t.remaining = t.exec_time;          // Reset handling time
+            t.absolute_deadline = tick + t.period;  // "Must catch by tick X"
+        }
+    }
 }
 ```
 
-At every tick, we check if `tick % period == 0`. If so, a new instance of the task has "arrived". We reset its remaining execution time, mark it ready, and set its absolute deadline (e.g., if it arrives at tick 10 and has a period of 5, its absolute deadline is 15).
+🎯 **How `tick % period == 0` works:**
+- Ball 1 (period=5): activates at tick 0, 5, 10, 15, 20 → `tick % 5 == 0`
+- Ball 2 (period=10): activates at tick 0, 10, 20 → `tick % 10 == 0`
+- Ball 3 (period=20): activates at tick 0, 20 → `tick % 20 == 0`
 
-### 4. Selection Algorithms (Lines 172–195)
+At tick 0, ALL balls arrive. At tick 5, only Ball 1 comes back. At tick 10, Balls 1 and 2.
 
+---
+
+### Part 5: The Two Strategies
+
+**RM — "Always pick the fastest ball"** 🏃
 ```cpp
-// For RM (Static Priority)
-if (!best || t.static_priority < best->static_priority)
-
-// For EDF (Dynamic Priority)
-if (!best || t.absolute_deadline < best->absolute_deadline)
+Task* pick_rm(vector<Task> &tasks) {
+    // Pick the ready task with the LOWEST static_priority number
+    // Lower number = shorter period = higher priority
+    if (t.static_priority < best->static_priority)
+        best = &t;
+}
 ```
+Ball 1 (period 5) always beats Ball 2 (period 10) which always beats Ball 3 (period 20). This NEVER changes. Priorities are set once at the start.
 
-This highlights the fundamental difference between the two algorithms. 
-- **RM** only looks at a fixed number (`static_priority`) assigned at startup.
-- **EDF** looks at the `absolute_deadline` variable, which changes dynamically every period. 
+**EDF — "Always pick whichever ball is about to hit the ground"** 🎯
+```cpp
+Task* pick_edf(vector<Task> &tasks) {
+    // Pick the ready task with the SMALLEST absolute deadline
+    if (t.absolute_deadline < best->absolute_deadline)
+        best = &t;
+}
+```
+Priorities change every tick! At tick 3, Ball 1's deadline is tick 5 (close!) while Ball 2's deadline is tick 10 (far away). Ball 1 wins. But at tick 8, Ball 2's deadline is tick 10 (close!) while Ball 1's next deadline is tick 10 too. It's a tie! EDF adapts to the situation.
 
-### 5. Execution and Deadline Misses (Lines 217–252)
+**Why EDF is more powerful:** RM is like a general who always sends the same soldier first, no matter what. EDF is like a general who looks at the battlefield and picks the best soldier for RIGHT NOW. Adaptability wins. 🏆
+
+---
+
+### Part 6: The Simulation Loop
 
 ```cpp
-if ((double)tick >= t.absolute_deadline) {
-    // DEADLINE MISSED
-    t.deadline_misses++;
-    t.ready = false; 
-    t.remaining_time = 0;
+for (int tick = 0; tick < hyperperiod; tick++) {
+    activate_tasks(tasks, tick);         // Any balls arriving?
+
+    // Check for drops (deadline misses)
+    for (auto &t : tasks) {
+        if (t.ready && t.remaining > 0 && tick >= t.absolute_deadline) {
+            // DROPPED! 😱
+            t.missed++;
+        }
+    }
+
+    // Pick a ball (RM or EDF)
+    Task *running = pick_rm(tasks);  // or pick_edf(tasks)
+
+    // Handle it for 1 tick
+    if (running) {
+        running->remaining -= 1.0;
+        if (running->remaining <= 0)
+            running->completed++;    // Caught successfully! 🎉
+    }
 }
 ```
 
-Before picking a task to run, the simulation checks if any ready task has breached its deadline. If it has, we log the failure, abort the current instance, and reset it. 
+Each loop = 1 tick. We check what arrived, check for drops, pick the best ball, and handle it for 1 tick.
 
 ---
 
-## Key OS Concepts
+### Part 7: The Results
 
-| Concept | Where in Code | What It Does |
-|---------|---------------|--------------|
-| **Utilization Bound** | `rm_utilisation_bound` | The theoretical threshold of CPU load an algorithm can guarantee scheduling for. |
-| **Hyperperiod** | `compute_hyper_period` | The LCM of all periods; the exact length needed to prove schedulability via simulation. |
-| **Static Priority** | `select_rm` | Priorities set once (based on period length) and never changed. |
-| **Dynamic Priority** | `select_edf` | Priorities calculated on the fly based on which deadline is approaching fastest. |
+```
+RM:  0 misses → All deadlines met! ✅ (lucky — math said it might fail!)
+EDF: 0 misses → All deadlines met! ✅ (guaranteed by math)
+```
 
----
-
-## Test Results (Verified)
-
-| Metric Test (Manual Math vs Output) | Expected | Actual Output | Status |
-|-------------------------------------|----------|---------------|--------|
-| Total Utilization | $0.8500$ | $0.8500$ | ✅ PASS |
-| RM Bound (n=3) | $0.7798$ | $0.7798$ | ✅ PASS |
-| LCM (5, 10, 20) | $20$ | $20$ | ✅ PASS |
-| Deadlines missed (EDF) | 0 | 0 | ✅ PASS |
+**The twist:** RM works here even though the math said "not guaranteed." The bound (77.9%) is a **conservative lower limit** — like saying "this bridge can hold 10 tons" when it actually holds 12. The math gives a worst-case guarantee, but specific task sets can do better.
 
 ---
 
-## Viva Questions & Answers
+## 🧠 Concepts Cheat Sheet
 
-**Q: The output shows RM failed the schedulability check (0.85 > 0.779), but in the simulation, RM met all deadlines. How is this possible?**
-A: The Liu & Layland bound for RM ($n(2^{1/n}-1)$) is a **sufficient, but not necessary** condition. If the utilization is below the bound, it is mathematically guaranteed to work. If it is above the bound, it is not guaranteed, but it *might* still work depending on the exact alignment of task periods (especially if the periods are harmonious/multiples of each other, as 5, 10, and 20 are).
-
-**Q: Why does EDF always have a utilization bound of 1.0 (100%), whereas RM is much lower?**
-A: EDF uses dynamic priority. It can adapt on the fly and prioritize whichever task is in the most danger of failing its deadline. RM uses static priority. Because RM forces tasks with longer periods to always wait for tasks with shorter periods—even if the longer-period task is about to miss its deadline—the CPU cannot be fully utilized under worst-case phasing conditions.
-
-**Q: What is a Hyperperiod and why do we simulate exactly up to that point?**
-A: The hyperperiod is the Least Common Multiple (LCM) of all task periods. It represents the point where all tasks restart their cycles perfectly synchronized, exactly like they did at tick 0. If a schedule succeeds up to the hyperperiod without missing a deadline, it will succeed infinitely. Simulating further is mathematically redundant.
-
-**Q: In the code, what is the difference between a task's relative deadline and absolute deadline?**
-A: The relative deadline ($D_i$) is fixed. E.g., "This task must finish within 10 ticks of arriving." The absolute deadline is dynamic. If that same task arrives at tick 30, its absolute deadline is tick 40. EDF schedules using the absolute deadline.
+| Thing | ELI5 Version |
+|-------|-------------|
+| Real-Time | Tasks have DEADLINES. Miss one = failure. |
+| RM | "Fastest ball always has priority." Fixed. Simple. |
+| EDF | "Closest deadline always has priority." Dynamic. Powerful. |
+| Hyperperiod | LCM of all periods. Schedule repeats after this many ticks. |
+| Utilization | How much of the CPU each task eats. Total must be ≤ 100%. |
+| Schedulability | Math test: "Can we GUARANTEE all deadlines are met?" |
+| Deadline Miss | Ball dropped. Task didn't finish in time. System failure. |
+| Preemption | Stop working on one ball to catch a more urgent one. |
+| Periodic Task | A task that repeats at regular intervals forever. |

@@ -1,334 +1,202 @@
-/*
- * ============================================================
- * Task E — Real-Time Task Scheduler & Schedulability Analyzer
- * CSC413/CSE315 — OS Programming Assignment, Spring 2026
- * ============================================================
- *
- * Supports two scheduling modes, selectable at runtime:
- *   RM  — Rate Monotonic       (static priority, shorter period → higher priority)
- *   EDF — Earliest Deadline First (dynamic priority, closest deadline first)
- *
- * Schedulability checks performed BEFORE simulation:
- *   RM  : U = Σ(Ci/Ti) ≤ n × (2^(1/n) − 1)   (≈ 0.693 for large n)
- *   EDF : U ≤ 1.0
- *
- * Built-in test case (from the assignment):
- *   τ1: Ci=2, Ti=5  → U=0.40
- *   τ2: Ci=4, Ti=10 → U=0.40
- *   τ3: Ci=1, Ti=20 → U=0.05
- *   Total U = 0.85  → NOT schedulable by RM (bound≈0.779), IS by EDF.
- *
- * Build:
- *   g++ -Wall -Wextra -std=c++17 -o rt_scheduler rt_scheduler.cpp
- *
- * OS Concepts demonstrated:
- *   - Static vs dynamic priority scheduling
- *   - Schedulability analysis (utilisation bounds)
- *   - Hyperperiod (LCM of all periods) — simulation length
- *   - Deadline miss detection
- *   - Preemption in EDF
- * ============================================================
- */
+// Task E — Real-Time Scheduler: Rate Monotonic (RM) vs Earliest Deadline First (EDF)
+// Simulates periodic tasks with deadlines. Tests if RM and EDF can schedule them.
+//
+// Compile: g++ -o rt_scheduler rt_scheduler.cpp
+// Run:     ./rt_scheduler
 
 #include <iostream>
-#include <iomanip>
 #include <vector>
-#include <algorithm>
-#include <string>
-#include <numeric>   // std::lcm (C++17)
 #include <cmath>
-#include <climits>
-#include <sstream>
+#include <algorithm>
+using namespace std;
 
-/* ================================================================
- * Task — periodic real-time task
- * ================================================================ */
 struct Task {
     int    id;
-    double exec_time;    // Ci — worst-case execution time per period
-    double period;       // Ti — recurrence interval
-    double deadline;     // Di — relative deadline (= Ti in this project)
+    double exec_time;    // how long it runs each period (Ci)
+    double period;       // how often it repeats (Ti)
+    double deadline;     // must finish within this time (Di = Ti)
     double utilization;  // Ci / Ti
 
-    /* Per-instance simulation state (reset each period) */
-    double remaining_time    = 0.0;
-    double absolute_deadline = 0.0;
-    bool   ready             = false;
-    int    static_priority   = 0;   // RM: lower number = higher priority
+    // Simulation state (changes during simulation)
+    double remaining;           // time left in current period
+    double absolute_deadline;   // when current instance must finish
+    bool   ready;               // is this instance active?
+    int    static_priority;     // for RM: lower = higher priority
 
-    /* Statistics */
-    int instances_completed = 0;
-    int deadline_misses     = 0;
+    // Stats
+    int completed;
+    int missed;
 };
 
-/* ================================================================
- * GanttEntry — one time-unit of execution log
- * ================================================================ */
-struct GanttEntry {
-    int tick;
-    int task_id;   // -1 = idle
-    bool deadline_miss;
-};
-
-/* ================================================================
- * Utility: greatest common divisor / least common multiple
- * ================================================================ */
-static long long gcd_ll(long long a, long long b)
-{
-    while (b) { a %= b; std::swap(a, b); }
+// Compute GCD of two numbers
+long long gcd(long long a, long long b) {
+    while (b) { long long temp = b; b = a % b; a = temp; }
     return a;
 }
-static long long lcm_ll(long long a, long long b)
-{
-    return (a / gcd_ll(a, b)) * b;
+
+// Compute LCM of two numbers
+long long lcm(long long a, long long b) {
+    return (a / gcd(a, b)) * b;
 }
 
-/* ================================================================
- * compute_hyper_period
- *   Returns LCM of all task periods (integer arithmetic).
- * ================================================================ */
-static int compute_hyper_period(const std::vector<Task> &tasks)
-{
+// Compute hyperperiod = LCM of all periods
+int compute_hyperperiod(vector<Task> &tasks) {
     long long hp = 1;
     for (auto &t : tasks)
-        hp = lcm_ll(hp, (long long)t.period);
+        hp = lcm(hp, (long long)t.period);
     return (int)hp;
 }
 
-/* ================================================================
- * rm_utilisation_bound
- *   n × (2^(1/n) − 1)
- * ================================================================ */
-static double rm_utilisation_bound(int n)
-{
-    return (double)n * (std::pow(2.0, 1.0 / (double)n) - 1.0);
+// RM utilization bound: n * (2^(1/n) - 1)
+double rm_bound(int n) {
+    return (double)n * (pow(2.0, 1.0 / (double)n) - 1.0);
 }
 
-/* ================================================================
- * schedulability_check
- * ================================================================ */
-static void schedulability_check(const std::vector<Task> &tasks)
-{
-    int    n = (int)tasks.size();
-    double U = 0.0;
-    for (auto &t : tasks) U += t.utilization;
+// Check if the task set is schedulable
+void check_schedulability(vector<Task> &tasks) {
+    int n = tasks.size();
+    double total_U = 0;
+    for (auto &t : tasks) total_U += t.utilization;
 
-    double rm_bound  = rm_utilisation_bound(n);
-    double edf_bound = 1.0;
+    double rm_limit  = rm_bound(n);
+    double edf_limit = 1.0;
 
-    std::cout << "=== Schedulability Analysis ===\n";
-    std::cout << std::fixed << std::setprecision(4);
-
-    std::cout << "\nTask Set:\n";
-    std::cout << std::setw(6)  << "Task"
-              << std::setw(8)  << "Ci"
-              << std::setw(8)  << "Ti"
-              << std::setw(10) << "Ui\n";
-    std::cout << std::string(32, '-') << "\n";
+    cout << "=== Schedulability Analysis ===" << endl;
+    cout << "Task Set:" << endl;
     for (auto &t : tasks) {
-        std::cout << std::setw(6)  << ("τ" + std::to_string(t.id))
-                  << std::setw(8)  << t.exec_time
-                  << std::setw(8)  << t.period
-                  << std::setw(10) << t.utilization << "\n";
+        cout << "  Task " << t.id << ": Ci=" << t.exec_time
+             << ", Ti=" << t.period << ", Ui=" << t.utilization << endl;
     }
-    std::cout << std::string(32, '-') << "\n";
-    std::cout << std::setw(22) << "Total U =" << std::setw(10) << U << "\n\n";
+    cout << "  Total Utilization U = " << total_U << endl << endl;
 
-    std::cout << "RM  Utilisation Bound  (n=" << n << "): " << rm_bound  << "\n";
-    std::cout << "EDF Utilisation Bound       : " << edf_bound << "\n\n";
+    cout << "RM  bound (n=" << n << "): " << rm_limit << endl;
+    cout << "EDF bound:         " << edf_limit << endl << endl;
 
-    bool rm_ok  = (U <= rm_bound);
-    bool edf_ok = (U <= edf_bound);
-
-    std::cout << "RM  schedulable : " << (rm_ok  ? "YES ✓" : "NO  ✗  (U exceeds bound)") << "\n";
-    std::cout << "EDF schedulable : " << (edf_ok ? "YES ✓" : "NO  ✗  (U > 1.0, impossible)") << "\n\n";
-
-    if (!edf_ok) {
-        std::cout << "WARNING: Task set is over-utilised — no algorithm can schedule it.\n\n";
-    } else if (!rm_ok) {
-        std::cout << "NOTE: RM may miss deadlines for this task set.\n"
-                  << "      Simulation will show which tasks miss in RM mode.\n\n";
-    }
+    cout << "RM  schedulable?  " << (total_U <= rm_limit ? "YES" : "NO (U > bound)") << endl;
+    cout << "EDF schedulable?  " << (total_U <= edf_limit ? "YES" : "NO (U > 1.0)") << endl;
+    cout << endl;
 }
 
-/* ================================================================
- * activate_tasks
- *   At each tick, re-activate tasks whose period has elapsed.
- * ================================================================ */
-static void activate_tasks(std::vector<Task> &tasks, int tick)
-{
+// Activate tasks at the start of each new period
+void activate_tasks(vector<Task> &tasks, int tick) {
     for (auto &t : tasks) {
         if (tick % (int)t.period == 0) {
             t.ready             = true;
-            t.remaining_time    = t.exec_time;
+            t.remaining         = t.exec_time;
             t.absolute_deadline = tick + t.period;
         }
     }
 }
 
-/* ================================================================
- * select_rm — pick highest static priority ready task
- * ================================================================ */
-static Task *select_rm(std::vector<Task> &tasks)
-{
+// RM: pick the ready task with the highest static priority (lowest number)
+Task* pick_rm(vector<Task> &tasks) {
     Task *best = nullptr;
     for (auto &t : tasks) {
-        if (!t.ready || t.remaining_time <= 0) continue;
+        if (!t.ready || t.remaining <= 0) continue;
         if (!best || t.static_priority < best->static_priority)
             best = &t;
     }
     return best;
 }
 
-/* ================================================================
- * select_edf — pick task with smallest absolute deadline
- * ================================================================ */
-static Task *select_edf(std::vector<Task> &tasks)
-{
+// EDF: pick the ready task with the earliest absolute deadline
+Task* pick_edf(vector<Task> &tasks) {
     Task *best = nullptr;
     for (auto &t : tasks) {
-        if (!t.ready || t.remaining_time <= 0) continue;
+        if (!t.ready || t.remaining <= 0) continue;
         if (!best || t.absolute_deadline < best->absolute_deadline)
             best = &t;
     }
     return best;
 }
 
-/* ================================================================
- * run_simulation
- * ================================================================ */
-static void run_simulation(std::vector<Task> tasks, const std::string &mode, int hyper_period)
-{
-    std::cout << "=== Simulation: " << mode << " mode (0 → " << hyper_period << " ticks) ===\n\n";
+// Run one simulation (either RM or EDF)
+void simulate(vector<Task> tasks, string mode, int hyperperiod) {
+    cout << "=== " << mode << " Simulation (0 to " << hyperperiod << " ticks) ===" << endl;
 
-    /* Assign RM static priorities: shorter period → lower number → higher priority */
+    // For RM: assign static priorities (shorter period = higher priority = lower number)
     if (mode == "RM") {
-        std::vector<Task *> sorted;
+        // Sort by period, assign priority 1, 2, 3...
+        vector<Task*> sorted;
         for (auto &t : tasks) sorted.push_back(&t);
-        std::sort(sorted.begin(), sorted.end(),
-                  [](Task *a, Task *b){ return a->period < b->period; });
+        sort(sorted.begin(), sorted.end(),
+             [](Task *a, Task *b) { return a->period < b->period; });
         for (int i = 0; i < (int)sorted.size(); i++)
-            sorted[i]->static_priority = i + 1;   // 1 = highest
+            sorted[i]->static_priority = i + 1;
     }
 
-    std::vector<GanttEntry> gantt;
-    int missed_total = 0;
+    int total_misses = 0;
 
-    for (int tick = 0; tick < hyper_period; tick++) {
-
-        /* 1. Activate tasks whose period starts now */
+    for (int tick = 0; tick < hyperperiod; tick++) {
+        // Step 1: Activate tasks whose new period starts now
         activate_tasks(tasks, tick);
 
-        /* 2. Check for deadline misses BEFORE scheduling */
+        // Step 2: Check for deadline misses
         for (auto &t : tasks) {
-            if (t.ready && t.remaining_time > 0 &&
-                (double)tick >= t.absolute_deadline) {
-                std::cout << "  [t=" << std::setw(3) << tick
-                          << "] *** DEADLINE MISSED for τ"
-                          << t.id << " (deadline was " << (int)t.absolute_deadline << ") ***\n";
-                t.deadline_misses++;
-                missed_total++;
-                /* Mark instance as failed, reset */
-                t.ready          = false;
-                t.remaining_time = 0;
+            if (t.ready && t.remaining > 0 && (double)tick >= t.absolute_deadline) {
+                cout << "  [t=" << tick << "] DEADLINE MISSED: Task " << t.id << endl;
+                t.missed++;
+                total_misses++;
+                t.ready = false;
+                t.remaining = 0;
             }
         }
 
-        /* 3. Select task */
-        Task *running = (mode == "EDF") ? select_edf(tasks) : select_rm(tasks);
+        // Step 3: Pick which task to run
+        Task *running = (mode == "EDF") ? pick_edf(tasks) : pick_rm(tasks);
 
-        /* 4. Execute one tick */
+        // Step 4: Execute one tick
         if (running) {
-            running->remaining_time -= 1.0;
-            gantt.push_back({tick, running->id, false});
-
-            if (running->remaining_time <= 0) {
+            cout << "  [t=" << tick << "] Task " << running->id << endl;
+            running->remaining -= 1.0;
+            if (running->remaining <= 0) {
                 running->ready = false;
-                running->instances_completed++;
+                running->completed++;
             }
         } else {
-            gantt.push_back({tick, -1, false});
+            cout << "  [t=" << tick << "] IDLE" << endl;
         }
     }
 
-    /* ---- Compact Gantt chart (group consecutive same-task runs) ---- */
-    std::cout << "Gantt Chart (compact):\n";
-    int i = 0;
-    while (i < (int)gantt.size()) {
-        int j = i;
-        while (j < (int)gantt.size() && gantt[j].task_id == gantt[i].task_id)
-            j++;
-        if (gantt[i].task_id == -1)
-            std::cout << "[t=" << std::setw(3) << gantt[i].tick
-                      << "-" << std::setw(3) << j << "] IDLE\n";
-        else
-            std::cout << "[t=" << std::setw(3) << gantt[i].tick
-                      << "-" << std::setw(3) << j << "] τ"
-                      << gantt[i].task_id << "\n";
-        i = j;
-    }
-
-    /* ---- Per-task summary ---- */
-    std::cout << "\nTask Summary:\n";
-    std::cout << std::setw(6)  << "Task"
-              << std::setw(12) << "Instances"
-              << std::setw(16) << "DL Misses\n";
-    std::cout << std::string(34, '-') << "\n";
+    // Print summary
+    cout << "\nSummary:" << endl;
+    cout << "  Task  Completed  Missed" << endl;
     for (auto &t : tasks) {
-        std::cout << std::setw(6)  << ("τ" + std::to_string(t.id))
-                  << std::setw(12) << t.instances_completed
-                  << std::setw(16) << t.deadline_misses << "\n";
+        cout << "    " << t.id << "       " << t.completed << "         " << t.missed << endl;
     }
-    std::cout << std::string(34, '-') << "\n";
-    std::cout << "Total deadline misses: " << missed_total << "\n";
-    std::cout << (missed_total == 0 ? "✓ All deadlines met!\n" : "✗ Deadline misses occurred.\n");
-    std::cout << "\n";
+    cout << "  Total misses: " << total_misses << endl;
+    if (total_misses == 0)
+        cout << "  All deadlines met!" << endl;
+    else
+        cout << "  Some deadlines were missed." << endl;
+    cout << endl;
 }
 
-/* ================================================================
- * main
- * ================================================================ */
-int main()
-{
-    std::cout << "=== Real-Time Scheduler & Schedulability Analyzer ===\n\n";
+int main() {
+    cout << "=== Real-Time Scheduler ===" << endl << endl;
 
-    /* ---- Built-in task set (from assignment specification) ---- */
-    std::vector<Task> tasks = {
-        /* id  exec  period  deadline  utilization */
-        {  1,  2.0,   5.0,   5.0,   2.0/5.0  },
-        {  2,  4.0,  10.0,  10.0,   4.0/10.0 },
-        {  3,  1.0,  20.0,  20.0,   1.0/20.0 },
+    // Task set from the assignment PDF
+    vector<Task> tasks = {
+        //  id  exec  period  deadline  util      rem  abs_dl ready prio  comp miss
+        {   1,  2.0,   5.0,    5.0,   2.0/5.0,   0,   0,    false,  0,   0,   0},
+        {   2,  4.0,  10.0,   10.0,   4.0/10.0,  0,   0,    false,  0,   0,   0},
+        {   3,  1.0,  20.0,   20.0,   1.0/20.0,  0,   0,    false,  0,   0,   0},
     };
 
-    /* ---- Schedulability check ---- */
-    schedulability_check(tasks);
+    // Check schedulability before simulating
+    check_schedulability(tasks);
 
-    /* ---- Hyperperiod ---- */
-    int hp = compute_hyper_period(tasks);
-    std::cout << "Hyperperiod (LCM of periods): " << hp << " ticks\n\n";
+    // Compute hyperperiod (LCM of all periods)
+    int hp = compute_hyperperiod(tasks);
+    cout << "Hyperperiod = " << hp << " ticks" << endl << endl;
 
-    /* ---- Run both modes so the user can compare ---- */
-    std::cout << std::string(60, '=') << "\n";
-    run_simulation(tasks, "RM",  hp);
+    // Run RM simulation
+    cout << string(50, '=') << endl;
+    simulate(tasks, "RM", hp);
 
-    std::cout << std::string(60, '=') << "\n";
-    run_simulation(tasks, "EDF", hp);
-
-    /* ---- Interactive mode selection ---- */
-    std::cout << std::string(60, '=') << "\n";
-    std::cout << "Run again with custom mode? (RM/EDF/no): ";
-    std::string choice;
-    std::cin >> choice;
-
-    if (choice == "RM" || choice == "rm" || choice == "EDF" || choice == "edf") {
-        std::string mode = (choice == "rm") ? "RM" : choice;
-        // Uppercase
-        for (auto &c : mode) c = toupper(c);
-        std::cout << "\n";
-        run_simulation(tasks, mode, hp);
-    } else {
-        std::cout << "Done.\n";
-    }
+    // Run EDF simulation
+    cout << string(50, '=') << endl;
+    simulate(tasks, "EDF", hp);
 
     return 0;
 }

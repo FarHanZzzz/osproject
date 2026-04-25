@@ -1,148 +1,189 @@
-# Task D — MLQ Scheduler
-## How the Code Works — Complete Explanation
+# 🏥 Task D — MLQ Scheduler (ELI5 Edition)
 
-> **Source:** `mlq_scheduler.cpp` | **Language:** C++ | **OS Concepts:** Multilevel Queue, Time Slicing, Round Robin, SJF, FCFS
+## The Story
+
+Imagine a **hospital emergency room** with 3 waiting areas:
+
+| Waiting Area | Who's Here | Rule | Time |
+|---|---|---|---|
+| 🚨 **Area 1 (System)** | Heart attacks, strokes | Take turns, 2 min each (Round Robin) | Gets 50% of doctor's time |
+| 🤒 **Area 2 (Interactive)** | Broken bones, fevers | Quickest fix goes first (SJF) | Gets 30% of doctor's time |
+| 🤕 **Area 3 (Batch)** | Papercuts, bruises | First come, first served (FCFS) | Gets 20% of doctor's time |
+
+The doctor (CPU) cycles through:
+1. Spend 5 minutes on Area 1 patients
+2. Spend 3 minutes on Area 2 patients
+3. Spend 2 minutes on Area 3 patients
+4. Repeat!
+
+Nobody starves — even papercut patients eventually get treated.
 
 ---
 
-## What This Program Does
+## 🔧 How to Run It
 
-This program simulates a Multilevel Queue (MLQ) CPU scheduler. Instead of a single queue for all processes, it categorizes processes into three strict queues based on priority:
-1. **System (Priority 0-10):** Runs Round Robin (quantum=2). Gets 50% CPU time (5 ticks).
-2. **Interactive (Priority 11-20):** Runs Shortest Job First (non-preemptive). Gets 30% CPU time (3 ticks).
-3. **Batch (Priority 21-30):** Runs First Come First Served. Gets 20% CPU time (2 ticks).
-
-To prevent lower queues from starving, it utilizes an overarching time-slicing mechanism that cycles through the queues: Q1(5 ticks) → Q2(3 ticks) → Q3(2 ticks) → Repeat.
+```bash
+g++ -o mlq_scheduler mlq_scheduler.cpp
+./mlq_scheduler
+```
 
 ---
 
-## How It Works — Step by Step
+## 📖 Code Walkthrough — The Fun Version
 
-### 1. Process Classification (Lines 73–78)
+### Part 1: Patient Info (Process Struct)
 
 ```cpp
-static int classify_queue(Process &p) {
-    if (p.priority <= 10) { p.queue_name = "Q1-System";      return 1; }
-    if (p.priority <= 20) { p.queue_name = "Q2-Interactive"; return 2; }
-                            p.queue_name = "Q3-Batch";        return 3;
+struct Process {
+    int pid;            // Patient ID
+    int arrival;        // When they walked in
+    int burst;          // Total treatment time needed
+    int remaining;      // How much treatment is left
+    int priority;       // 0-10=Area1, 11-20=Area2, 21-30=Area3
+    int start_time;     // When they first saw the doctor (-1 = never)
+    int completion;     // When treatment finished
+    int turnaround;     // Total time in hospital (completion - arrival)
+    int waiting;        // Time spent in waiting room (turnaround - burst)
+    int response;       // Wait until first doctor visit (start - arrival)
+};
+```
+
+**Why `start_time = -1`?** We need to know "has this patient EVER seen the doctor?" If `start_time` was 0, we couldn't tell the difference between "saw doctor at time 0" and "hasn't seen doctor yet". So `-1` means "never seen".
+
+**The metrics:**
+- **Turnaround** = When you leave - When you arrived = total hospital time
+- **Waiting** = Turnaround - actual treatment time = time sitting around doing nothing
+- **Response** = First time seeing doctor - arrival = "how long till I was first seen?"
+
+---
+
+### Part 2: Which Waiting Area?
+
+```cpp
+int get_queue(int priority) {
+    if (priority <= 10) return 1;    // 🚨 Critical
+    if (priority <= 20) return 2;    // 🤒 Medium
+    return 3;                         // 🤕 Low
 }
 ```
 
-Whenever we need to interact with a process, we check its priority and assign it to its static queue. In a true MLQ (unlike MLFQ), processes cannot change queues. 
+Simple. Priority 0–10 = Area 1. Priority 11–20 = Area 2. Everything else = Area 3.
 
-### 2. The Time-Sliced Simulation Loop (Lines 362–368)
+---
 
-```cpp
-while (!all_done() && current_time < MAX_TICKS) {
-    run_Q1_RR  (BUDGET_Q1); // 5 ticks
-    if (all_done()) break;
-    run_Q2_SJF (BUDGET_Q2); // 3 ticks
-    if (all_done()) break;
-    run_Q3_FCFS(BUDGET_Q3); // 2 ticks
-}
-```
-
-This is the core execution cycle. Instead of letting Q1 run until it is completely empty (which would starve Q2 and Q3), the system gives a strict time budget to each queue. We check `all_done()` between calls so we don't log idle ticks if the entire system finishes early.
-
-### 3. Queue 1: Round Robin Mechanics (Lines 124–154)
+### Part 3: Treating a Patient for 1 Tick
 
 ```cpp
-int run_for = std::min({QUANTUM, p->remaining_time, time_budget - spent});
-for (int i = 0; i < run_for; i++) {
-    run_tick(p, "Q1");
-    spent++;
-    collect_arrived(ready, 1); // Get new arrivals
-}
-if (p->remaining_time > 0)
-    ready.push_back(p);
-```
+void run_one_tick(Process *p, string qname) {
+    if (p->start_time == -1) p->start_time = now;  // First time seeing doctor!
+    p->remaining--;                                   // 1 minute of treatment done
+    now++;                                             // Clock moves forward
 
-For Round Robin, we pull a process from the `front` of the ready deque. 
-We determine how long it can run using a 3-way minimum:
-1. It can't exceed the RR `QUANTUM` (2 ticks).
-2. It can't run longer than its `remaining_time`.
-3. It can't exceed the queue's remaining `time_budget`.
-
-If the process isn't finished after its turn, it gets placed at the `back` of the deque, waiting for its next turn. New arrivals are checked every tick so they interleave properly.
-
-### 4. Queue 2: Shortest Job First Mechanics (Lines 159–193)
-
-```cpp
-std::sort(ready.begin(), ready.end(),
-    [](Process *a, Process *b) {
-        return a->remaining_time < b->remaining_time;
-    });
-
-Process *p = ready[0];
-int run_for = std::min(p->remaining_time, time_budget - spent);
-```
-
-To implement SJF, we collect all arrived Q2 processes into a vector and sort them based on `remaining_time`. The process at index 0 is the shortest. Since it's **non-preemptive**, it runs until it finishes or until the queue's time budget runs out. We re-sort every time we pick a new process because a shorter job might have arrived.
-
-### 5. Queue 3: First Come First Served (Lines 198–225)
-
-```cpp
-for (auto &proc : all_processes) {
-    if (proc.arrival_time <= current_time && proc.remaining_time > 0 && classify_queue(proc) == 3) {
-        if (!p || proc.arrival_time < p->arrival_time)
-            p = &proc;
+    if (p->remaining == 0) {
+        // Patient is CURED! 🎉 Calculate all their stats.
+        p->completion  = now;
+        p->turnaround  = p->completion - p->arrival;
+        p->waiting     = p->turnaround - p->burst;
+        p->response    = p->start_time - p->arrival;
     }
 }
 ```
 
-FCFS is simple. We scan all processes and find the one that belongs to Q3, has arrived, and has the absolute lowest `arrival_time`.
+---
 
-### 6. Process Metric Calculations (Lines 100–113)
+### Part 4: Area 1 — Round Robin 🔄
 
 ```cpp
-if (p->start_time == -1) p->start_time = current_time;
-p->remaining_time--;
+void run_Q1(int budget) {    // budget = 5 ticks
+    // 1. Take the patient at the FRONT of the line
+    Process *p = ready.front();
+    ready.pop_front();
 
-if (p->remaining_time == 0) {
-    p->completion_time  = current_time;
-    p->turnaround_time  = p->completion_time - p->arrival_time;
-    p->waiting_time     = p->turnaround_time - p->burst_time;
-    p->response_time    = p->start_time      - p->arrival_time;
+    // 2. Treat them for at most 2 ticks (the quantum)
+    int run_for = min({2, p->remaining, budget - spent});
+
+    // 3. Not cured yet? Go to the BACK of the line
+    if (p->remaining > 0)
+        ready.push_back(p);
 }
 ```
 
-Metrics are gathered lazily inside `run_tick`. The moment a process finishes (`remaining_time == 0`), we calculate the exact metrics based on OS formulas.
+🔄 **Round Robin = taking turns.** Everyone gets exactly 2 minutes (quantum) with the doctor. If you need more time, you go to the back of the line and wait for your next turn. It's the fairest system — nobody hogs the doctor.
+
+**Why `min({2, remaining, budget})`?** Three constraints at once:
+- `2` = quantum (max per turn)
+- `remaining` = don't treat longer than needed (patient with 1 min left only needs 1)
+- `budget` = Q1 only gets 5 ticks total, don't go over
 
 ---
 
-## Key OS Concepts
+### Part 5: Area 2 — Shortest Job First 📏
 
-| Concept | Where in Code | What It Does |
-|---------|---------------|--------------|
-| **Multilevel Queue** | `classify_queue` | Segregating processes by static priority into distinct execution buckets. |
-| **Time Slicing** | Main `while` loop | Allocating distinct execution windows (5,3,2 ticks) to prevent starvation. |
-| **Round Robin** | `run_Q1_RR` | Preempting processes after a time quantum, ensuring fair response times. |
-| **SJF** | `run_Q2_SJF` | Sorting by remaining time to minimize average waiting time. |
-| **Metrics** | `run_tick` | Turnaround, Waiting, and Response times evaluated mathematically. |
+```cpp
+void run_Q2(int budget) {    // budget = 3 ticks
+    // Sort patients by how much treatment they need (shortest first)
+    sort(ready.begin(), ready.end(),
+         [](Process *a, Process *b) { return a->remaining < b->remaining; });
 
----
+    Process *p = ready[0];    // Pick the one needing LEAST time
+    // Treat them (non-preemptive = once started, don't stop)
+}
+```
 
-## Test Results (Verified)
+📏 **SJF = "who needs the least time? You go first!"** If Patient A needs 8 min and Patient B needs 2 min, B goes first. This minimizes average waiting time.
 
-| Metric Test (Manual Math vs Output) | Status |
-|-------------------------------------|--------|
-| P1: TAT = 12, WT = 6, RT = 0 | ✅ PASS |
-| P2: TAT = 20, WT = 16, RT = 3 | ✅ PASS |
-| Average TAT: 35.11 | ✅ PASS |
-| Average WT: 30.11 | ✅ PASS |
+**Non-preemptive** means once you start treating someone, you finish (or run out of budget). You don't stop mid-treatment because someone shorter walked in.
 
 ---
 
-## Viva Questions & Answers
+### Part 6: Area 3 — First Come First Served 🎫
 
-**Q: What is the difference between MLQ and MLFQ (Multilevel Feedback Queue)?**
-A: In MLQ (which this implements), processes are assigned to a queue based on a static property (like priority 0-10) and they *never leave that queue*. In MLFQ, processes dynamically move between queues based on their behavior (e.g., getting demoted if they use too much CPU time). 
+```cpp
+void run_Q3(int budget) {    // budget = 2 ticks
+    // Find whoever arrived EARLIEST
+    Process *earliest = nullptr;
+    for (auto &p : procs) {
+        if (p.arrival < earliest->arrival)
+            earliest = &p;
+    }
+    // Treat them
+}
+```
 
-**Q: How does this implementation solve the "Starvation" problem common in MLQ?**
-A: If Q1 always had absolute priority, it could run continuously and completely starve Q2 and Q3. This implementation uses time-slicing across the queues. Q1 is guaranteed only 50% of the CPU cycles (5 ticks out of 10). Q2 is guaranteed 30%, and Q3 is guaranteed 20%. This ensures even the lowest priority batch jobs eventually make progress.
+🎫 **FCFS = a regular line at a store.** Whoever showed up first gets treated first. Simple, fair by arrival order, but not efficient (a 1-minute patient behind a 30-minute patient waits a long time).
 
-**Q: In Q2 (SJF), why do you sort the processes every single time a job finishes?**
-A: Because new jobs can arrive while the current job is executing. If we only sorted at the beginning, we might miss a newly arrived process that has a burst time of 1, which should jump to the front of the queue.
+---
 
-**Q: Why does the RR algorithm use `push_back` instead of `push_front` on the deque?**
-A: Round Robin requires that when a process finishes its time quantum, it goes to the end of the line so that the next process gets a fair turn. If we used `push_front`, the same process would immediately run again, defeating the purpose of fair sharing.
+### Part 7: The Main Loop — Cycling Through Areas
+
+```cpp
+while (!all_done() && now < 200) {
+    run_Q1(5);     // Doctor spends 5 ticks on Area 1
+    if (all_done()) break;
+    run_Q2(3);     // Then 3 ticks on Area 2
+    if (all_done()) break;
+    run_Q3(2);     // Then 2 ticks on Area 3
+    // Repeat!
+}
+```
+
+🔁 **The cycle:** Q1 → Q2 → Q3 → Q1 → Q2 → Q3 → ...
+
+**Why time-slicing instead of strict priority?** Without it, if Q1 always has patients, Q2 and Q3 would **starve** (never get treated). Time-slicing guarantees Q3 gets at least 20% of the doctor's time.
+
+**Why `now < 200`?** Safety net. If there's a bug and processes never finish, the program doesn't loop forever.
+
+---
+
+## 🧠 Concepts Cheat Sheet
+
+| Thing | ELI5 Version |
+|-------|-------------|
+| MLQ | 3 separate lines, each with its own rules |
+| Round Robin | Take turns, everyone gets same amount of time |
+| SJF | Shortest job goes first = least average waiting |
+| FCFS | Regular queue — first come, first served |
+| Time Slicing | Doctor splits time between areas so nobody starves |
+| Starvation | When low-priority patients NEVER get treated |
+| Quantum | The max time you get per turn in Round Robin |
+| Context Switch | When the doctor switches from one patient to another |

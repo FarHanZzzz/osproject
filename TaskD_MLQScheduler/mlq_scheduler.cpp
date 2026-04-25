@@ -1,134 +1,84 @@
-/*
- * ============================================================
- * Task D — Time-Sliced Multilevel Queue (MLQ) Scheduler
- * CSC413/CSE315 — OS Programming Assignment, Spring 2026
- * ============================================================
- *
- * Configuration:
- *   Queue 1 (System,      priority 0–10)  : Round Robin, quantum = 2
- *   Queue 2 (Interactive, priority 11–20) : Shortest Job First (non-preemptive)
- *   Queue 3 (Batch,       priority 21–30) : FCFS
- *
- *   Time-slice cycle (per 10 ticks):
- *     Q1 → 5 ticks | Q2 → 3 ticks | Q3 → 2 ticks
- *
- * Build:
- *   g++ -Wall -Wextra -std=c++17 -o mlq_scheduler mlq_scheduler.cpp
- *
- * OS Concepts demonstrated:
- *   - MLQ vs MLFQ (no demotion/promotion in MLQ)
- *   - Inter-queue time slicing (prevents starvation of lower queues)
- *   - RR, SJF, FCFS algorithms within each queue
- *   - Waiting Time, Turnaround Time, Response Time metrics
- * ============================================================
- */
+// Task D — Time-Sliced Multilevel Queue (MLQ) Scheduler
+// 3 queues with different scheduling algorithms:
+//   Q1 (priority 0-10):  Round Robin (quantum=2), gets 5 ticks per cycle
+//   Q2 (priority 11-20): Shortest Job First, gets 3 ticks per cycle
+//   Q3 (priority 21-30): First Come First Served, gets 2 ticks per cycle
+//
+// Compile: g++ -o mlq_scheduler mlq_scheduler.cpp
+// Run:     ./mlq_scheduler
 
 #include <iostream>
-#include <iomanip>
 #include <vector>
-#include <algorithm>
-#include <string>
 #include <deque>
-#include <climits>
+#include <algorithm>
+using namespace std;
 
-/* ================================================================
- * Process structure
- * ================================================================ */
 struct Process {
-    int  pid;
-    int  arrival_time;
-    int  burst_time;
-    int  remaining_time;
-    int  priority;          // 0–10 = Q1, 11–20 = Q2, 21–30 = Q3
-
-    /* Metrics — filled in during simulation */
-    int  start_time      = -1;   // first time process got CPU
-    int  completion_time =  0;
-    int  waiting_time    =  0;
-    int  turnaround_time =  0;
-    int  response_time   =  0;
-
-    std::string queue_name;
+    int pid;
+    int arrival;
+    int burst;
+    int remaining;
+    int priority;       // 0-10=Q1, 11-20=Q2, 21-30=Q3
+    int start_time;     // first time it got CPU (-1 = hasn't run yet)
+    int completion;
+    int turnaround;
+    int waiting;
+    int response;
 };
 
-/* ================================================================
- * Gantt chart entry
- * ================================================================ */
-struct GanttSlot {
-    int         pid;        // -1 = idle
-    int         tick;
-    std::string queue;
-};
+// Global state
+vector<Process> procs;
+int now = 0;  // current time
 
-/* ================================================================
- * Global simulation state
- * ================================================================ */
-static std::vector<Process>   all_processes;
-static std::vector<GanttSlot> gantt;
-static int current_time = 0;
-
-/* ----------------------------------------------------------------
- * classify_queue — returns queue index (1/2/3) and sets queue_name
- * ---------------------------------------------------------------- */
-static int classify_queue(Process &p)
-{
-    if (p.priority <= 10) { p.queue_name = "Q1-System";      return 1; }
-    if (p.priority <= 20) { p.queue_name = "Q2-Interactive"; return 2; }
-                            p.queue_name = "Q3-Batch";        return 3;
+// Which queue does this process belong to?
+int get_queue(int priority) {
+    if (priority <= 10) return 1;
+    if (priority <= 20) return 2;
+    return 3;
 }
 
-/* ----------------------------------------------------------------
- * arrive — collect processes that have arrived by current_time
- * ---------------------------------------------------------------- */
-static void collect_arrived(std::deque<Process *> &q, int queue_id)
-{
-    for (auto &p : all_processes) {
-        if (p.arrival_time <= current_time &&
-            p.remaining_time > 0 &&
-            classify_queue(p) == queue_id) {
-            /* Only add if not already in deque */
-            bool found = false;
-            for (auto *ptr : q) if (ptr->pid == p.pid) { found = true; break; }
-            if (!found) q.push_back(&p);
-        }
+// Check if all processes are done
+bool all_done() {
+    for (auto &p : procs)
+        if (p.remaining > 0) return false;
+    return true;
+}
+
+// Run one tick of a process
+void run_one_tick(Process *p, string qname) {
+    if (p->start_time == -1) p->start_time = now;
+    p->remaining--;
+    cout << "  [t=" << now << "] P" << p->pid << " (" << qname << ")\n";
+    now++;
+
+    if (p->remaining == 0) {
+        p->completion  = now;
+        p->turnaround  = p->completion - p->arrival;
+        p->waiting     = p->turnaround - p->burst;
+        p->response    = p->start_time - p->arrival;
     }
 }
 
-/* ----------------------------------------------------------------
- * run_tick — execute one tick of a process
- * ---------------------------------------------------------------- */
-static void run_tick(Process *p, const std::string &qname)
-{
-    if (p->start_time == -1) p->start_time = current_time;
-    p->remaining_time--;
-    gantt.push_back({p->pid, current_time, qname});
-    current_time++;
-
-    if (p->remaining_time == 0) {
-        p->completion_time  = current_time;
-        p->turnaround_time  = p->completion_time - p->arrival_time;
-        p->waiting_time     = p->turnaround_time - p->burst_time;
-        p->response_time    = p->start_time      - p->arrival_time;
-    }
+// Run idle for one tick
+void run_idle() {
+    cout << "  [t=" << now << "] IDLE\n";
+    now++;
 }
 
-static void run_idle()
-{
-    gantt.push_back({-1, current_time, "idle"});
-    current_time++;
-}
-
-/* ================================================================
- * run_Q1_RR — Round Robin, quantum = 2
- * ================================================================ */
-static void run_Q1_RR(int time_budget)
-{
-    const int QUANTUM = 2;
-    std::deque<Process *> ready;
-
+// ---- Q1: Round Robin (quantum = 2) ----
+void run_Q1(int budget) {
     int spent = 0;
-    while (spent < time_budget) {
-        collect_arrived(ready, 1);
+    deque<Process*> ready;
+
+    while (spent < budget) {
+        // Add newly arrived Q1 processes to ready queue
+        for (auto &p : procs) {
+            if (p.arrival <= now && p.remaining > 0 && get_queue(p.priority) == 1) {
+                bool already = false;
+                for (auto *r : ready) if (r->pid == p.pid) already = true;
+                if (!already) ready.push_back(&p);
+            }
+        }
 
         if (ready.empty()) {
             run_idle();
@@ -139,35 +89,37 @@ static void run_Q1_RR(int time_budget)
         Process *p = ready.front();
         ready.pop_front();
 
-        int run_for = std::min({QUANTUM, p->remaining_time, time_budget - spent});
+        // Run for min(quantum=2, remaining time, remaining budget)
+        int run_for = min({2, p->remaining, budget - spent});
         for (int i = 0; i < run_for; i++) {
-            run_tick(p, "Q1");
+            run_one_tick(p, "Q1-RR");
             spent++;
-            /* collect newly arrived processes after each tick */
-            collect_arrived(ready, 1);
+            // Check for new arrivals after each tick
+            for (auto &proc : procs) {
+                if (proc.arrival <= now && proc.remaining > 0 && get_queue(proc.priority) == 1) {
+                    bool already = false;
+                    for (auto *r : ready) if (r->pid == proc.pid) already = true;
+                    if (proc.pid != p->pid && !already) ready.push_back(&proc);
+                }
+            }
         }
 
-        /* If not finished, push back to end of queue (Round Robin) */
-        if (p->remaining_time > 0)
+        // If process isn't done, put it at the back (Round Robin!)
+        if (p->remaining > 0)
             ready.push_back(p);
     }
 }
 
-/* ================================================================
- * run_Q2_SJF — Shortest Job First (non-preemptive)
- * ================================================================ */
-static void run_Q2_SJF(int time_budget)
-{
+// ---- Q2: Shortest Job First (non-preemptive) ----
+void run_Q2(int budget) {
     int spent = 0;
-    while (spent < time_budget) {
-        /* Collect all arrived, then pick shortest */
-        std::vector<Process *> ready;
-        for (auto &p : all_processes) {
-            if (p.arrival_time <= current_time &&
-                p.remaining_time > 0 &&
-                classify_queue(p) == 2) {
+
+    while (spent < budget) {
+        // Find all arrived Q2 processes
+        vector<Process*> ready;
+        for (auto &p : procs) {
+            if (p.arrival <= now && p.remaining > 0 && get_queue(p.priority) == 2)
                 ready.push_back(&p);
-            }
         }
 
         if (ready.empty()) {
@@ -176,200 +128,112 @@ static void run_Q2_SJF(int time_budget)
             continue;
         }
 
-        /* Sort by remaining_time (SJF picks shortest) */
-        std::sort(ready.begin(), ready.end(),
-                  [](Process *a, Process *b) {
-                      return a->remaining_time < b->remaining_time;
-                  });
+        // Sort by remaining time (shortest first)
+        sort(ready.begin(), ready.end(),
+             [](Process *a, Process *b) { return a->remaining < b->remaining; });
 
         Process *p = ready[0];
-        /* Run to completion (non-preemptive) but don't exceed budget */
-        int run_for = std::min(p->remaining_time, time_budget - spent);
+        int run_for = min(p->remaining, budget - spent);
         for (int i = 0; i < run_for; i++) {
-            run_tick(p, "Q2");
+            run_one_tick(p, "Q2-SJF");
             spent++;
         }
     }
 }
 
-/* ================================================================
- * run_Q3_FCFS — First Come First Served
- * ================================================================ */
-static void run_Q3_FCFS(int time_budget)
-{
+// ---- Q3: First Come First Served ----
+void run_Q3(int budget) {
     int spent = 0;
-    while (spent < time_budget) {
-        /* Find earliest-arrived unfinished Q3 process */
-        Process *p = nullptr;
-        for (auto &proc : all_processes) {
-            if (proc.arrival_time <= current_time &&
-                proc.remaining_time > 0 &&
-                classify_queue(proc) == 3) {
-                if (!p || proc.arrival_time < p->arrival_time)
-                    p = &proc;
+
+    while (spent < budget) {
+        // Find the earliest-arrived Q3 process
+        Process *earliest = nullptr;
+        for (auto &p : procs) {
+            if (p.arrival <= now && p.remaining > 0 && get_queue(p.priority) == 3) {
+                if (!earliest || p.arrival < earliest->arrival)
+                    earliest = &p;
             }
         }
 
-        if (!p) {
+        if (!earliest) {
             run_idle();
             spent++;
             continue;
         }
 
-        int run_for = std::min(p->remaining_time, time_budget - spent);
+        int run_for = min(earliest->remaining, budget - spent);
         for (int i = 0; i < run_for; i++) {
-            run_tick(p, "Q3");
+            run_one_tick(earliest, "Q3-FCFS");
             spent++;
         }
     }
 }
 
-/* ================================================================
- * all_done — true when every process has finished
- * ================================================================ */
-static bool all_done()
-{
-    for (auto &p : all_processes)
-        if (p.remaining_time > 0) return false;
-    return true;
-}
+int main() {
+    cout << "=== MLQ Scheduler ===" << endl;
+    cout << "Q1 (System,      prio 0-10):  Round Robin, 50% CPU" << endl;
+    cout << "Q2 (Interactive, prio 11-20): SJF,         30% CPU" << endl;
+    cout << "Q3 (Batch,       prio 21-30): FCFS,        20% CPU" << endl << endl;
 
-/* ================================================================
- * print_gantt
- * ================================================================ */
-static void print_gantt()
-{
-    std::cout << "\n=== Gantt Chart ===\n";
-
-    /* Print process row */
-    for (auto &slot : gantt) {
-        if (slot.pid == -1)
-            std::cout << "|idle";
-        else
-            std::cout << "| P" << slot.pid;
-    }
-    std::cout << "|\n";
-
-    /* Print time marks every 5 ticks */
-    int t = 0;
-    for (size_t i = 0; i < gantt.size(); i++, t++) {
-        if (i % 5 == 0)
-            std::cout << std::setw(5) << t;
-    }
-    std::cout << std::setw(5) << t << "\n";
-
-    /* Print queue assignments */
-    std::cout << "\nQueue assignments:\n";
-    for (auto &slot : gantt) {
-        if (slot.pid == -1)
-            std::cout << "[t=" << std::setw(3) << slot.tick << "] IDLE\n";
-        else
-            std::cout << "[t=" << std::setw(3) << slot.tick
-                      << "] P" << slot.pid
-                      << " (" << slot.queue << ")\n";
-    }
-}
-
-/* ================================================================
- * print_metrics
- * ================================================================ */
-static void print_metrics()
-{
-    std::cout << "\n=== Process Metrics ===\n";
-    std::cout << std::left
-              << std::setw(5)  << "PID"
-              << std::setw(8)  << "Queue"
-              << std::setw(9)  << "Arrival"
-              << std::setw(7)  << "Burst"
-              << std::setw(13) << "Completion"
-              << std::setw(12) << "Turnaround"
-              << std::setw(10) << "Waiting"
-              << std::setw(10) << "Response"
-              << "\n";
-    std::cout << std::string(74, '-') << "\n";
-
-    double total_tat = 0, total_wt = 0, total_rt = 0;
-    int count = 0;
-
-    for (auto &p : all_processes) {
-        std::cout << std::setw(5)  << p.pid
-                  << std::setw(8)  << p.queue_name.substr(0,2)
-                  << std::setw(9)  << p.arrival_time
-                  << std::setw(7)  << p.burst_time
-                  << std::setw(13) << p.completion_time
-                  << std::setw(12) << p.turnaround_time
-                  << std::setw(10) << p.waiting_time
-                  << std::setw(10) << p.response_time
-                  << "\n";
-        total_tat += p.turnaround_time;
-        total_wt  += p.waiting_time;
-        total_rt  += p.response_time;
-        count++;
-    }
-
-    std::cout << std::string(74, '-') << "\n";
-    std::cout << std::fixed << std::setprecision(2);
-    std::cout << "Averages → Turnaround: " << total_tat/count
-              << "  Waiting: "  << total_wt/count
-              << "  Response: " << total_rt/count << "\n";
-}
-
-/* ================================================================
- * main
- * ================================================================ */
-int main()
-{
-    std::cout << "=== Time-Sliced MLQ Scheduler ===\n";
-    std::cout << "  Q1 (System,      priority  0-10): Round Robin (quantum=2), 50% CPU\n";
-    std::cout << "  Q2 (Interactive, priority 11-20): SJF (non-preemptive),    30% CPU\n";
-    std::cout << "  Q3 (Batch,       priority 21-30): FCFS,                    20% CPU\n\n";
-
-    /* ---- Sample process set: 9 processes across all 3 queues ---- */
-    all_processes = {
-        /*  pid  arrival  burst  remaining  priority  start compl wait tat  resp  queue_name */
-        {  1,    0,       6,     6,         5,        -1,   0,    0,   0,   0,    "" },  // Q1
-        {  2,    1,       4,     4,         3,        -1,   0,    0,   0,   0,    "" },  // Q1
-        {  3,    2,       8,     8,         15,       -1,   0,    0,   0,   0,    "" },  // Q2
-        {  4,    0,       5,     5,         18,       -1,   0,    0,   0,   0,    "" },  // Q2
-        {  5,    3,       3,     3,         25,       -1,   0,    0,   0,   0,    "" },  // Q3
-        {  6,    1,       7,     7,         28,       -1,   0,    0,   0,   0,    "" },  // Q3
-        {  7,    4,       2,     2,         8,        -1,   0,    0,   0,   0,    "" },  // Q1
-        {  8,    2,       6,     6,         12,       -1,   0,    0,   0,   0,    "" },  // Q2
-        {  9,    5,       4,     4,         22,       -1,   0,    0,   0,   0,    "" },  // Q3
+    // 9 test processes across all 3 queues
+    //           pid  arr  burst  rem  prio  start compl turn wait resp
+    procs = {
+        {1,  0, 6, 6,  5,  -1, 0, 0, 0, 0},   // Q1
+        {2,  1, 4, 4,  3,  -1, 0, 0, 0, 0},   // Q1
+        {3,  2, 8, 8, 15,  -1, 0, 0, 0, 0},   // Q2
+        {4,  0, 5, 5, 18,  -1, 0, 0, 0, 0},   // Q2
+        {5,  3, 3, 3, 25,  -1, 0, 0, 0, 0},   // Q3
+        {6,  1, 7, 7, 28,  -1, 0, 0, 0, 0},   // Q3
+        {7,  4, 2, 2,  8,  -1, 0, 0, 0, 0},   // Q1
+        {8,  2, 6, 6, 12,  -1, 0, 0, 0, 0},   // Q2
+        {9,  5, 4, 4, 22,  -1, 0, 0, 0, 0},   // Q3
     };
 
-    /* Classify & display input */
-    std::cout << "Input Processes:\n";
-    std::cout << std::setw(5) << "PID" << std::setw(9) << "Arrival"
-              << std::setw(7) << "Burst" << std::setw(10) << "Priority"
-              << std::setw(18) << "Queue\n";
-    std::cout << std::string(49, '-') << "\n";
-    for (auto &p : all_processes) {
-        classify_queue(p);
-        std::cout << std::setw(5) << p.pid << std::setw(9) << p.arrival_time
-                  << std::setw(7) << p.burst_time << std::setw(10) << p.priority
-                  << std::setw(18) << p.queue_name << "\n";
-    }
-    std::cout << "\n";
-
-    /* ---- Time-sliced simulation loop ---- */
-    /* Cycle: Q1=5 ticks, Q2=3 ticks, Q3=2 ticks → repeat */
-    const int BUDGET_Q1 = 5;
-    const int BUDGET_Q2 = 3;
-    const int BUDGET_Q3 = 2;
-    const int MAX_TICKS = 200; /* safety cap */
-
-    while (!all_done() && current_time < MAX_TICKS) {
-        run_Q1_RR  (BUDGET_Q1);
-        if (all_done()) break;
-        run_Q2_SJF (BUDGET_Q2);
-        if (all_done()) break;
-        run_Q3_FCFS(BUDGET_Q3);
+    // Print input table
+    cout << "Input Processes:" << endl;
+    cout << "  PID  Arrival  Burst  Priority  Queue" << endl;
+    cout << "  ---  -------  -----  --------  -----" << endl;
+    for (auto &p : procs) {
+        string qname = (get_queue(p.priority) == 1) ? "Q1" :
+                        (get_queue(p.priority) == 2) ? "Q2" : "Q3";
+        cout << "   " << p.pid << "      " << p.arrival << "      " << p.burst
+             << "       " << p.priority << "      " << qname << endl;
     }
 
-    /* ---- Output ---- */
-    print_gantt();
-    print_metrics();
+    // Run the scheduler: cycle through Q1(5), Q2(3), Q3(2) until all done
+    cout << "\n=== Execution Timeline ===" << endl;
+    while (!all_done() && now < 200) {
+        run_Q1(5);
+        if (all_done()) break;
+        run_Q2(3);
+        if (all_done()) break;
+        run_Q3(2);
+    }
+
+    // Print results
+    cout << "\n=== Results ===" << endl;
+    cout << "  PID  Arrival  Burst  Completion  Turnaround  Waiting  Response" << endl;
+    cout << "  ---  -------  -----  ----------  ----------  -------  --------" << endl;
+
+    double total_tat = 0, total_wt = 0, total_rt = 0;
+    for (auto &p : procs) {
+        cout << "   " << p.pid
+             << "      " << p.arrival
+             << "      " << p.burst
+             << "        " << p.completion
+             << "          " << p.turnaround
+             << "         " << p.waiting
+             << "        " << p.response << endl;
+        total_tat += p.turnaround;
+        total_wt  += p.waiting;
+        total_rt  += p.response;
+    }
+
+    int n = procs.size();
+    cout << "\nAverages:" << endl;
+    cout << "  Turnaround: " << total_tat / n << endl;
+    cout << "  Waiting:    " << total_wt / n << endl;
+    cout << "  Response:   " << total_rt / n << endl;
 
     return 0;
 }
