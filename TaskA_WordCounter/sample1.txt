@@ -1,0 +1,3 @@
+Hello world
+This is a test file for the word counter
+It has exactly fourteen words in total

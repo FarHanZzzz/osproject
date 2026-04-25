@@ -1,163 +1,64 @@
-# 🧮 Task C — Parallel Matrix Adder (ELI5 Edition)
+# Task C: Matrix Adder (Concepts First!)
 
-## The Story
-
-Imagine you have two MASSIVE spreadsheets (1000 rows × 1000 columns each). You need to add them together cell by cell. Doing it alone? Takes forever.
-
-So you hire **4 workers**. You split the spreadsheet into 4 horizontal strips:
-- Worker 0: "You handle rows 0–249"
-- Worker 1: "You handle rows 250–499"
-- Worker 2: "You handle rows 500–749"
-- Worker 3: "You handle rows 750–999"
-
-They all work **at the same time** (parallel!). Nobody touches anyone else's rows. No arguments, no conflicts, no need for locks. Done in 1/4 the time! 🚀
+Before diving into the code, let's understand the core concept of **Threads**.
 
 ---
 
-## 🎯 The Big Picture
+## 🧠 Core Concept: Processes vs. Threads
+In Task A, we learned about `fork()`, which creates a brand new **Process** (a clone). If a Process is a house, then a `fork()` builds a completely separate, identical house next door. They can't easily share a kitchen.
 
-```
-     Thread 0 ──→ rows   0-249  ──→ ┐
-     Thread 1 ──→ rows 250-499  ──→ │──→ Complete Matrix C = A + B
-     Thread 2 ──→ rows 500-749  ──→ │
-     Thread 3 ──→ rows 750-999  ──→ ┘
-```
+A **Thread**, however, is like adding a new roommate to your *current* house. 
+- You both share the same kitchen (memory).
+- You can both chop vegetables on the same counter at the same time.
+- Because you don't have to build a whole new house, creating a thread is *much faster and lighter* than creating a process!
 
----
-
-## 🔧 How to Run It
-
-```bash
-gcc -o matrix_add matrix_adder.c -lpthread
-./matrix_add 4     # use 4 workers
-./matrix_add 1     # use 1 worker (for comparison)
-```
+In this task, we have two massive lists of numbers (1000x1000 Matrices) that need to be added together. If one roommate does all the math, it takes a long time. So, we hire **4 roommates (threads)**. We tell Roommate 1 to do the first 250 rows, Roommate 2 to do the next 250, and so on. They all write their answers onto the *same shared piece of paper* (the global matrix `C`).
 
 ---
 
-## 📖 Code Walkthrough — The Fun Version
+## 💻 How the Code Works
 
-### Part 1: The Giant Spreadsheets
+This program is extremely simple and **hardcoded** to use exactly 4 threads. It divides 1000 rows perfectly into chunks of 250.
 
-```c
-#define ROWS 1000
-#define COLS 1000
+### Step-by-Step Walkthrough
 
-static int A[ROWS][COLS];    // Spreadsheet A
-static int B[ROWS][COLS];    // Spreadsheet B
-static int C[ROWS][COLS];    // Result: A + B
-```
+1. **Defining the Shared Memory**
+   ```c
+   int A[ROWS][COLS];
+   int B[ROWS][COLS];
+   int C[ROWS][COLS];
+   ```
+   These are our matrices. Because they are declared outside of any function (Global Variables), all threads can see and touch them without needing a "Pipe" to communicate!
 
-📊 **Why `static` and global?** Each spreadsheet is 1000×1000 × 4 bytes = **4 MB**. Three spreadsheets = 12 MB. The **stack** (where local variables live) is only 8 MB on Linux. Putting 12 MB on an 8 MB stack = 💥 crash! `static` global variables go in a different memory area (data segment) that has no size limit.
+2. **Telling Threads What To Do**
+   ```c
+   ThreadArgs args1 = {0,   250};
+   ThreadArgs args2 = {250, 500};
+   // ...
+   ```
+   We create a simple struct. It's a sticky note that says: *"Hey Thread 1, you start at row 0 and stop at row 250."*
 
----
+3. **Starting the Threads**
+   ```c
+   pthread_create(&thread1, NULL, add_rows, &args1);
+   ```
+   This is where the magic happens. We spawn the first thread. We tell it to run the `add_rows` function, and we hand it the `args1` sticky note. We do this 4 times.
 
-### Part 2: The Job Description (ThreadArgs)
+4. **The Work Function**
+   ```c
+   void *add_rows(void *arg) {
+       ThreadArgs *t = (ThreadArgs *)arg;
+       for (int i = t->start_row; i < t->end_row; i++) {
+           for (int j = 0; j < COLS; j++) {
+               C[i][j] = A[i][j] + B[i][j];
+           }
+       }
+   }
+   ```
+   All 4 threads are running this function at the exact same time. Thread 1 is adding row 0, while Thread 2 is adding row 250. Because they are working on *different rows*, they never bump into each other. No "locks" are needed!
 
-```c
-typedef struct {
-    int id;           // "You are Worker 2"
-    int start_row;    // "Start at row 500"
-    int end_row;      // "Stop before row 750"
-} ThreadArgs;
-```
-
-📋 **Why do we need a struct?** `pthread_create()` only lets you pass ONE argument. But we need to tell each worker three things (their ID, start row, end row). So we pack everything into a struct and hand the worker a pointer to it.
-
----
-
-### Part 3: The Worker's Job
-
-```c
-void *add_rows(void *arg) {
-    ThreadArgs *t = (ThreadArgs *)arg;    // "Let me read my job description"
-
-    for (int i = t->start_row; i < t->end_row; i++) {
-        for (int j = 0; j < COLS; j++) {
-            C[i][j] = A[i][j] + B[i][j];     // Add one cell
-        }
-    }
-
-    return NULL;    // "Boss, I'm done!"
-}
-```
-
-🔒 **Why no locks/mutexes?** Think of it like 4 painters painting 4 different walls. Painter 1 never touches Wall 2. They don't need to take turns or ask permission — they're completely independent. In our code:
-- Thread 0 writes C[0..249][*]
-- Thread 1 writes C[250..499][*]
-- No overlap = no conflict = no lock needed!
-
-**What about reading A and B?** Reading shared data is ALWAYS safe. Only writing to the same spot causes problems. Multiple people can read the same book at the same time without issues.
-
----
-
-### Part 4: Dividing the Work
-
-```c
-int rows_per_thread = ROWS / num_threads;    // 1000 / 4 = 250
-int extra_rows      = ROWS % num_threads;    // 1000 % 4 = 0
-```
-
-🍕 **Like cutting a pizza:** 1000 rows ÷ 4 threads = 250 rows each, no leftovers.
-
-But what about 1000 ÷ 3 = 333 remainder 1?
-- Thread 0: rows 0–332 (333 rows)
-- Thread 1: rows 333–665 (333 rows)
-- Thread 2: rows 666–999 (**334 rows** — eats the leftover slice!)
-
-```c
-if (i == num_threads - 1)
-    args[i].end_row += extra_rows;    // Last worker gets the extra slice
-```
-
----
-
-### Part 5: Hiring the Workers
-
-```c
-for (int i = 0; i < num_threads; i++) {
-    // Fill in the job description
-    args[i].id = i;
-    args[i].start_row = current_row;
-    args[i].end_row = current_row + rows_per_thread;
-
-    // HIRE! Worker starts immediately
-    pthread_create(&threads[i], NULL, add_rows, &args[i]);
-}
-```
-
-🏃 **`pthread_create` is like saying "GO!"** The new thread starts running `add_rows` immediately, in parallel with the main thread. It's like clapping your hands and a worker appears and starts working.
-
-**Arguments:**
-- `&threads[i]` — "Here's your employee badge" (thread ID)
-- `NULL` — default settings
-- `add_rows` — "This is your job"
-- `&args[i]` — "Here's your job description"
-
----
-
-### Part 6: Waiting for Everyone to Finish
-
-```c
-for (int i = 0; i < num_threads; i++) {
-    pthread_join(threads[i], NULL);    // "Worker i, are you done?"
-}
-```
-
-⏳ **`pthread_join` = "Wait until this worker finishes."** If we skip this, the main thread might print "Done!" and exit while the workers are still adding numbers. The result would be incomplete garbage.
-
-This is like `waitpid()` in Task A, but for threads instead of processes.
-
----
-
-## 🧠 Concepts Cheat Sheet
-
-| Thing | ELI5 Version |
-|-------|-------------|
-| Thread | A lightweight worker that shares memory with other workers |
-| Process (Task A) vs Thread | Process = separate house (own memory). Thread = roommate (shared memory). |
-| `pthread_create` | "GO!" — starts a new worker immediately |
-| `pthread_join` | "Wait until done" — don't leave before workers finish |
-| Mutex | A lock for shared resources. WE DON'T NEED ONE because nobody shares rows! |
-| Data Race | Two workers writing to the same cell at the same time = garbage. We avoid it by design. |
-| Embarrassingly Parallel | Work that splits perfectly with zero overlap. The dream scenario! |
+5. **Waiting for the End**
+   ```c
+   pthread_join(thread1, NULL);
+   ```
+   Just like `waitpid()` in Task A, `pthread_join()` makes the main program pause and wait for the roommate to finish their math before exiting the program.
