@@ -16,9 +16,9 @@
 // Remove: sudo rmmod simple
 // ============================================================
 
-#include <linux/init.h>     // For __init and __exit
-#include <linux/kernel.h>   // For printk()
-#include <linux/module.h>   // For module_init() and module_exit()
+#include <linux/init.h>   // For __init and __exit
+#include <linux/kernel.h> // For printk()
+#include <linux/module.h> // For module_init() and module_exit()
 
 // ======================================================
 // STEP 1: The INIT function
@@ -29,10 +29,9 @@
 // printk() is like printf() but for kernel code.
 // KERN_INFO means "this is just an informational message."
 // You can see the output by running: sudo dmesg | tail
-static int __init simple_init(void)
-{
-    printk(KERN_INFO "Hello! Kernel module loaded.\n");
-    return 0;  // Return 0 means "loaded successfully"
+static int __init simple_init(void) {
+  printk(KERN_INFO "Hello! Kernel module loaded.\n");
+  return 0; // Return 0 means "loaded successfully"
 }
 
 // ======================================================
@@ -40,9 +39,8 @@ static int __init simple_init(void)
 // ======================================================
 // This function runs when you remove the module with:
 //   sudo rmmod simple
-static void __exit simple_exit(void)
-{
-    printk(KERN_INFO "Goodbye! Kernel module removed.\n");
+static void __exit simple_exit(void) {
+  printk(KERN_INFO "Goodbye! Kernel module removed.\n");
 }
 
 // ======================================================
