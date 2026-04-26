@@ -6,162 +6,164 @@
 // words in one file and sends the result back to the parent
 // using a pipe (Inter-Process Communication).
 //
-// HOW WE SOLVE IT:
-//   1. Parent creates two pipes (one per file).
-//   2. Parent calls fork() twice to create two child processes.
-//   3. Each child opens its assigned file, counts the words,
-//      and writes the count into its pipe.
-//   4. Parent reads the counts from both pipes and prints the total.
+// ENHANCEMENTS:
+//   - Dynamic Tasks: User provides file names via command line
+//     (e.g., ./word_counter file1.txt file2.txt file3.txt)
+//   - Error Reporting: Child sends -1 through the pipe if a
+//     file cannot be found.
 //
 // Compile: gcc -o word_counter word_counter.c
-// Run:     ./word_counter
+// Run:     ./word_counter sample1.txt sample2.txt
 // ============================================================
 
 #include <stdio.h>   // For printf, fopen, fscanf, fclose
 #include <stdlib.h>  // For exit()
 #include <unistd.h>  // For fork(), pipe(), read(), write()
-#include <sys/wait.h> // For waitpid() — to wait for children to finish
+#include <sys/wait.h> // For waitpid()
+
+#define MAX_FILES 10  // Maximum number of files we support
 
 // ----------------------------------------------------------
 // HELPER FUNCTION: count_words
 // Opens a file and counts how many words are inside it.
-// A "word" is any sequence of characters separated by spaces,
-// tabs, or newlines. fscanf("%s") handles this automatically.
+// Returns -1 if the file cannot be opened (error reporting).
 // ----------------------------------------------------------
 int count_words(const char *filename) {
-    // Try to open the file for reading
     FILE *fp = fopen(filename, "r");
 
-    // If the file doesn't exist, tell the user and return 0
+    // ERROR REPORTING: If the file doesn't exist, return -1
+    // This -1 will be sent through the pipe to the parent
     if (!fp) {
-        printf("  [Child] ERROR: Could not open '%s'\n", filename);
-        return 0;
+        printf("  [Child %d] ERROR: Could not open '%s'\n", getpid(), filename);
+        return -1;
     }
 
-    int count = 0;       // This will hold our word count
-    char word[256];      // A buffer to temporarily store each word
+    int count = 0;
+    char word[4096];
 
-    // fscanf reads one word at a time from the file.
-    // It skips all whitespace (spaces, tabs, newlines) automatically.
-    // It returns 1 if it successfully read a word, or EOF when done.
-    while (fscanf(fp, "%255s", word) == 1) {
-        count++;  // We found a word! Increment the counter.
+    // fscanf reads one word at a time, skipping whitespace
+    while (fscanf(fp, "%4095s", word) == 1) {
+        count++;
     }
 
-    fclose(fp);   // Always close the file when done
-    return count; // Send the count back to whoever called this function
+    fclose(fp);
+    return count;
 }
 
 // ----------------------------------------------------------
 // MAIN FUNCTION
-// This is where the program starts. It creates pipes, forks
-// child processes, and collects results.
 // ----------------------------------------------------------
-int main() {
+int main(int argc, char *argv[]) {
     printf("=== Word Counter (fork + pipe) ===\n\n");
 
     // ======================================================
-    // STEP 1: Create two pipes
+    // STEP 1: Check command-line arguments (Dynamic Tasks)
     // ======================================================
-    // A pipe is like a one-way tube.
-    //   pipe1[0] = the READ end  (parent reads from here)
-    //   pipe1[1] = the WRITE end (child writes into here)
-    // We need one pipe per file because each child sends
-    // its result through its own dedicated pipe.
-    int pipe1[2];  // Pipe for file 1 (sample1.txt)
-    int pipe2[2];  // Pipe for file 2 (sample2.txt)
+    // The user provides file names on the command line.
+    // If no files given, show usage and use default files.
+    int num_files;
+    char *files[MAX_FILES];
 
-    pipe(pipe1);   // Create the first pipe
-    pipe(pipe2);   // Create the second pipe
-
-    // ======================================================
-    // STEP 2: Fork Child 1 to count words in "sample1.txt"
-    // ======================================================
-    // fork() creates a clone of this program.
-    // In the PARENT, fork() returns the child's PID (a positive number).
-    // In the CHILD, fork() returns 0.
-    // So we use "if (pid == 0)" to detect that we are the child.
-    pid_t pid1 = fork();
-
-    if (pid1 == 0) {
-        // ---- WE ARE INSIDE CHILD 1 ----
-
-        // Close the read end — the child only WRITES, never reads
-        close(pipe1[0]);
-
-        // Count the words in sample1.txt
-        int words = count_words("sample1.txt");
-
-        // Write the integer result into the pipe so the parent can read it
-        // We use &words to pass a pointer to the integer,
-        // and sizeof(words) tells write() how many bytes to send (4 bytes for an int).
-        write(pipe1[1], &words, sizeof(words));
-
-        // Close the write end — we are done sending data
-        close(pipe1[1]);
-
-        // Exit the child process. This is important!
-        // Without exit(), the child would continue running the parent's code below.
-        exit(0);
+    if (argc > 1) {
+        // User provided file names: ./word_counter file1.txt file2.txt
+        num_files = argc - 1;
+        if (num_files > MAX_FILES) num_files = MAX_FILES;
+        for (int i = 0; i < num_files; i++) {
+            files[i] = argv[i + 1];
+        }
+        printf("Processing %d file(s) from command line.\n\n", num_files);
+    } else {
+        // No arguments — use default sample files
+        num_files = 2;
+        files[0] = "sample1.txt";
+        files[1] = "sample2.txt";
+        printf("No files specified. Using defaults: sample1.txt, sample2.txt\n");
+        printf("Usage: ./word_counter file1.txt file2.txt ...\n\n");
     }
 
     // ======================================================
-    // STEP 3: Fork Child 2 to count words in "sample2.txt"
+    // STEP 2: Create pipes and fork children dynamically
     // ======================================================
-    // Same logic as above, but for the second file.
-    pid_t pid2 = fork();
+    // One pipe per file. Each pipe is a one-way tube:
+    //   pipes[i][0] = READ end  (parent reads from here)
+    //   pipes[i][1] = WRITE end (child writes into here)
+    int pipes[MAX_FILES][2];
+    pid_t pids[MAX_FILES];
 
-    if (pid2 == 0) {
-        // ---- WE ARE INSIDE CHILD 2 ----
+    for (int i = 0; i < num_files; i++) {
+        // Create the pipe BEFORE forking so both parent and
+        // child inherit the file descriptors
+        pipe(pipes[i]);
 
-        close(pipe2[0]);  // Close read end
+        // fork() creates a child process
+        pids[i] = fork();
 
-        int words = count_words("sample2.txt");
+        if (pids[i] == 0) {
+            // ---- WE ARE INSIDE THE CHILD ----
 
-        write(pipe2[1], &words, sizeof(words));
+            // Close the read end — the child only WRITES
+            close(pipes[i][0]);
 
-        close(pipe2[1]);  // Close write end
+            // Close all previously created pipes (prevent deadlock)
+            for (int j = 0; j < i; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
 
-        exit(0);          // Exit the child
+            // Count words in the assigned file
+            // Returns -1 if file not found (error reporting)
+            int result = count_words(files[i]);
+
+            // Write the result into the pipe (could be -1 for error)
+            write(pipes[i][1], &result, sizeof(result));
+
+            close(pipes[i][1]);  // Done writing
+            exit(0);             // Exit the child process
+        }
+
+        // ---- PARENT continues here ----
+        // Close the write end — the parent only READS
+        close(pipes[i][1]);
     }
 
     // ======================================================
-    // STEP 4: Parent waits for both children to finish
+    // STEP 3: Read results from all pipes
     // ======================================================
-    // The parent must close the WRITE ends of the pipes.
-    // If the parent keeps the write end open, read() will
-    // block forever waiting for more data that never comes.
-    close(pipe1[1]);
-    close(pipe2[1]);
+    int total = 0;
+    int errors = 0;
 
-    // waitpid() pauses the parent until the specified child exits.
-    // This prevents "zombie processes" (dead children that aren't cleaned up).
-    waitpid(pid1, NULL, 0);  // Wait for Child 1
-    waitpid(pid2, NULL, 0);  // Wait for Child 2
+    printf("Results:\n");
+    for (int i = 0; i < num_files; i++) {
+        int result = 0;
+        read(pipes[i][0], &result, sizeof(result));
+        close(pipes[i][0]);
 
-    // ======================================================
-    // STEP 5: Read results from the pipes
-    // ======================================================
-    int result1 = 0;
-    int result2 = 0;
-
-    // read() pulls data from the READ end of the pipe.
-    // The child already wrote an integer into pipe1[1],
-    // so we read it from pipe1[0].
-    read(pipe1[0], &result1, sizeof(result1));
-    read(pipe2[0], &result2, sizeof(result2));
-
-    // Close the read ends now that we've got the data
-    close(pipe1[0]);
-    close(pipe2[0]);
+        // Check for error code (-1 means file not found)
+        if (result == -1) {
+            printf("  %-20s : ERROR (file not found)\n", files[i]);
+            errors++;
+        } else {
+            printf("  %-20s : %d words\n", files[i], result);
+            total += result;
+        }
+    }
 
     // ======================================================
-    // STEP 6: Print the final results
+    // STEP 4: Wait for all children to finish (prevent zombies)
     // ======================================================
-    printf("  Words in sample1.txt: %d\n", result1);
-    printf("  Words in sample2.txt: %d\n", result2);
+    for (int i = 0; i < num_files; i++) {
+        int status;
+        waitpid(pids[i], &status, 0);
+    }
+
+    // ======================================================
+    // STEP 5: Print final summary
+    // ======================================================
     printf("  ─────────────────────────\n");
-    printf("  Total Words:          %d\n", result1 + result2);
+    printf("  Total Words:          %d\n", total);
+    if (errors > 0) {
+        printf("  Files with errors:    %d\n", errors);
+    }
 
-    return 0;  // Program finished successfully
+    return 0;
 }

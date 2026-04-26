@@ -3,34 +3,29 @@
 // ============================================================
 // PROBLEM (from PDF): Simulate two real-time scheduling algorithms
 // (Rate Monotonic and Earliest Deadline First) on a set of periodic
-// tasks. Show the execution timeline and check if deadlines are met.
+// tasks. Show the execution timeline, check if deadlines are met,
+// and perform schedulability analysis BEFORE running simulations.
 //
-// HOW WE SOLVE IT:
-//   1. Define 3 hardcoded periodic tasks with known exec times and periods.
-//   2. Hardcode the Hyperperiod to 20 (LCM of 5, 10, 20).
-//   3. For RM: priority is fixed — shorter period = higher priority.
-//      We just use an if-else chain (Task1 always checked first).
-//   4. For EDF: priority is dynamic — whoever's deadline is closest
-//      gets the CPU. We compute deadlines on the fly.
-//   5. At the start of each period, we "wake up" (activate) the task
-//      by resetting its remaining execution time.
+// FEATURES:
+//   1. Schedulability Testing (RM bound + EDF bound)
+//   2. Rate Monotonic simulation with fixed priorities
+//   3. EDF simulation with dynamic priorities
+//   4. Deadline miss detection
+//   5. Hyperperiod calculation
 //
 // Compile: g++ -o rt_scheduler rt_scheduler.cpp
 // Run:     ./rt_scheduler
 // ============================================================
 
-#include <iostream>  // For cout
-#include <vector>    // For vector
+#include <iostream>
+#include <vector>
+#include <cmath>     // For pow() — needed for RM bound calculation
+#include <iomanip>   // For setprecision()
 using namespace std;
 
 // ----------------------------------------------------------
 // TASK STRUCT
 // ----------------------------------------------------------
-// Each task has:
-//   id        — a name (1, 2, or 3)
-//   exec_time — how many ticks it needs to run each period
-//   period    — how often it repeats (also its deadline)
-//   time_left — how many ticks it still needs in the current period
 struct Task {
     int id;
     int exec_time;  // Ci: execution time per period
@@ -39,110 +34,152 @@ struct Task {
 };
 
 // ----------------------------------------------------------
+// HELPER: Compute GCD (for LCM calculation)
+// ----------------------------------------------------------
+int gcd(int a, int b) {
+    while (b != 0) {
+        int temp = b;
+        b = a % b;
+        a = temp;
+    }
+    return a;
+}
+
+// ----------------------------------------------------------
+// HELPER: Compute LCM (for hyperperiod)
+// ----------------------------------------------------------
+int lcm(int a, int b) {
+    return a / gcd(a, b) * b;
+}
+
+// ----------------------------------------------------------
 // MAIN FUNCTION
 // ----------------------------------------------------------
 int main() {
     cout << "=== Real-Time Scheduler ===" << endl << endl;
 
     // ======================================================
-    // STEP 1: Define the hardcoded task set
+    // STEP 1: Define the task set
     // ======================================================
-    // From the PDF:
-    //   Task 1: Exec=2, Period=5   (runs every 5 ticks, needs 2 ticks)
-    //   Task 2: Exec=4, Period=10  (runs every 10 ticks, needs 4 ticks)
-    //   Task 3: Exec=1, Period=20  (runs every 20 ticks, needs 1 tick)
-    //
-    // Total Utilization = 2/5 + 4/10 + 1/20 = 0.4 + 0.4 + 0.05 = 0.85
-    // This means the CPU is 85% busy. EDF works if utilization <= 1.0 (it does!).
-    // RM might also work — let's simulate and find out!
     vector<Task> tasks = {
-        {1, 2, 5,  0},   // Task 1
-        {2, 4, 10, 0},   // Task 2
-        {3, 1, 20, 0},   // Task 3
+        {1, 2, 5,  0},   // Task 1: Exec=2, Period=5
+        {2, 4, 10, 0},   // Task 2: Exec=4, Period=10
+        {3, 1, 20, 0},   // Task 3: Exec=1, Period=20
     };
 
-    // Print the task info
+    int n = tasks.size();
+
+    // Print task info
     cout << "Task Set:" << endl;
     cout << "  Task  Exec(Ci)  Period(Ti)  Utilization" << endl;
     cout << "  ----  --------  ----------  -----------" << endl;
+    double total_util = 0.0;
     for (auto &t : tasks) {
+        double u = (double)t.exec_time / t.period;
+        total_util += u;
         cout << "    " << t.id << "       " << t.exec_time
              << "         " << t.period
-             << "         " << (double)t.exec_time / t.period << endl;
+             << "         " << fixed << setprecision(2) << u << endl;
     }
-    cout << "  Total Utilization = 0.85" << endl << endl;
+    cout << "  Total Utilization = " << fixed << setprecision(2) << total_util << endl << endl;
 
     // ======================================================
-    // Hardcoded Hyperperiod = 20
+    // STEP 2: Compute Hyperperiod (LCM of all periods)
     // ======================================================
-    // The Hyperperiod is the LCM (Least Common Multiple) of all periods.
-    // LCM(5, 10, 20) = 20. After 20 ticks, the entire pattern repeats.
-    // So we only need to simulate 20 ticks to prove correctness.
-    int hyperperiod = 20;
-    cout << "Hyperperiod = " << hyperperiod << " ticks" << endl << endl;
+    int hyperperiod = tasks[0].period;
+    for (int i = 1; i < n; i++) {
+        hyperperiod = lcm(hyperperiod, tasks[i].period);
+    }
+    cout << "Hyperperiod = LCM(" << tasks[0].period;
+    for (int i = 1; i < n; i++) cout << ", " << tasks[i].period;
+    cout << ") = " << hyperperiod << " ticks" << endl << endl;
 
     // ======================================================
-    // SIMULATION 1: Rate Monotonic (RM)
+    // STEP 3: SCHEDULABILITY TESTING (before simulation)
     // ======================================================
-    // RM RULE: The task with the SHORTEST PERIOD always has the
-    // HIGHEST priority. This priority NEVER changes.
-    //   Task 1 (period 5)  → Highest priority (checked first)
-    //   Task 2 (period 10) → Medium priority
-    //   Task 3 (period 20) → Lowest priority
+    // This checks whether the task set CAN be scheduled
+    // BEFORE actually running the simulation.
+    cout << string(50, '=') << endl;
+    cout << "=== Schedulability Analysis ===" << endl;
+    cout << string(50, '=') << endl;
+
+    // --- RM Bound Test ---
+    // Formula: n * (2^(1/n) - 1)
+    // For n=3: 3 * (2^(1/3) - 1) ≈ 0.779
+    // If U <= RM bound → RM is GUARANTEED to work
+    // If U > RM bound  → RM MIGHT still work (inconclusive)
+    double rm_bound = n * (pow(2.0, 1.0 / n) - 1);
+    cout << endl;
+    cout << "  RM Bound for n=" << n << ": "
+         << fixed << setprecision(3) << rm_bound << endl;
+    cout << "  Total Utilization: " << fixed << setprecision(3) << total_util << endl;
+
+    if (total_util <= rm_bound) {
+        cout << "  RM Result: U <= " << fixed << setprecision(3) << rm_bound
+             << " => GUARANTEED schedulable by RM" << endl;
+    } else if (total_util <= 1.0) {
+        cout << "  RM Result: U > " << fixed << setprecision(3) << rm_bound
+             << " => INCONCLUSIVE (must simulate to verify)" << endl;
+    } else {
+        cout << "  RM Result: U > 1.0 => NOT schedulable by ANY algorithm" << endl;
+    }
+
+    // --- EDF Bound Test ---
+    // EDF is guaranteed to work if U <= 1.0
+    cout << endl;
+    cout << "  EDF Bound: 1.000 (100% utilization)" << endl;
+    cout << "  Total Utilization: " << fixed << setprecision(3) << total_util << endl;
+
+    if (total_util <= 1.0) {
+        cout << "  EDF Result: U <= 1.0 => GUARANTEED schedulable by EDF" << endl;
+    } else {
+        cout << "  EDF Result: U > 1.0 => NOT schedulable" << endl;
+    }
+    cout << endl;
+
+    // ======================================================
+    // STEP 4: Rate Monotonic (RM) Simulation
+    // ======================================================
+    // RM RULE: Shortest period = highest FIXED priority.
+    //   Task 1 (period 5)  → Highest
+    //   Task 2 (period 10) → Medium
+    //   Task 3 (period 20) → Lowest
     cout << string(50, '=') << endl;
     cout << "=== Rate Monotonic (RM) Simulation ===" << endl;
     cout << string(50, '=') << endl;
 
     // Reset all tasks
-    tasks[0].time_left = 0;
-    tasks[1].time_left = 0;
-    tasks[2].time_left = 0;
+    for (auto &t : tasks) t.time_left = 0;
 
-    int rm_misses = 0;  // Count deadline misses
+    int rm_misses = 0;
 
     for (int tick = 0; tick < hyperperiod; tick++) {
-        // --- ACTIVATE tasks at the start of their new period ---
-        // If the current tick is a multiple of the period,
-        // a new instance of the task arrives and needs CPU time.
-        if (tick % 5 == 0) {
-            // Check if previous instance missed its deadline
-            if (tasks[0].time_left > 0) {
-                cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task 1 ***" << endl;
-                rm_misses++;
+        // Activate tasks at the start of their new period
+        for (int i = 0; i < n; i++) {
+            if (tick % tasks[i].period == 0) {
+                if (tasks[i].time_left > 0) {
+                    cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task "
+                         << tasks[i].id << " ***" << endl;
+                    rm_misses++;
+                }
+                tasks[i].time_left = tasks[i].exec_time;
             }
-            tasks[0].time_left = tasks[0].exec_time;  // Reset to 2
-        }
-        if (tick % 10 == 0) {
-            if (tasks[1].time_left > 0) {
-                cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task 2 ***" << endl;
-                rm_misses++;
-            }
-            tasks[1].time_left = tasks[1].exec_time;  // Reset to 4
-        }
-        if (tick % 20 == 0) {
-            if (tasks[2].time_left > 0) {
-                cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task 3 ***" << endl;
-                rm_misses++;
-            }
-            tasks[2].time_left = tasks[2].exec_time;  // Reset to 1
         }
 
-        // --- PICK the highest-priority task that still needs CPU ---
-        // Because RM uses FIXED priorities, we just check Task 1 first,
-        // then Task 2, then Task 3. Simple if-else chain!
-        if (tasks[0].time_left > 0) {
-            tasks[0].time_left--;
-            cout << "  [Tick " << tick << "] Running Task 1" << endl;
+        // Pick highest-priority ready task (shortest period first)
+        // Tasks are already sorted by period (5, 10, 20)
+        int chosen = -1;
+        for (int i = 0; i < n; i++) {
+            if (tasks[i].time_left > 0) {
+                chosen = i;
+                break;  // First ready task = highest priority
+            }
         }
-        else if (tasks[1].time_left > 0) {
-            tasks[1].time_left--;
-            cout << "  [Tick " << tick << "] Running Task 2" << endl;
-        }
-        else if (tasks[2].time_left > 0) {
-            tasks[2].time_left--;
-            cout << "  [Tick " << tick << "] Running Task 3" << endl;
-        }
-        else {
+
+        if (chosen != -1) {
+            tasks[chosen].time_left--;
+            cout << "  [Tick " << tick << "] Running Task " << tasks[chosen].id << endl;
+        } else {
             cout << "  [Tick " << tick << "] IDLE" << endl;
         }
     }
@@ -152,72 +189,52 @@ int main() {
     cout << endl;
 
     // ======================================================
-    // SIMULATION 2: Earliest Deadline First (EDF)
+    // STEP 5: Earliest Deadline First (EDF) Simulation
     // ======================================================
     // EDF RULE: The task whose ABSOLUTE DEADLINE is closest
-    // (soonest) gets the CPU. Priority changes DYNAMICALLY every tick.
+    // (soonest) gets the CPU. Priority changes DYNAMICALLY.
     cout << string(50, '=') << endl;
     cout << "=== Earliest Deadline First (EDF) Simulation ===" << endl;
     cout << string(50, '=') << endl;
 
     // Reset all tasks
-    tasks[0].time_left = 0;
-    tasks[1].time_left = 0;
-    tasks[2].time_left = 0;
+    for (auto &t : tasks) t.time_left = 0;
+
+    // Track absolute deadlines for each task
+    vector<int> abs_deadline(n, 0);
 
     int edf_misses = 0;
 
     for (int tick = 0; tick < hyperperiod; tick++) {
-        // --- ACTIVATE tasks at the start of their new period ---
-        if (tick % 5 == 0) {
-            if (tasks[0].time_left > 0) {
-                cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task 1 ***" << endl;
-                edf_misses++;
+        // Activate tasks at the start of their new period
+        for (int i = 0; i < n; i++) {
+            if (tick % tasks[i].period == 0) {
+                if (tasks[i].time_left > 0) {
+                    cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task "
+                         << tasks[i].id << " ***" << endl;
+                    edf_misses++;
+                }
+                tasks[i].time_left = tasks[i].exec_time;
+                // Set absolute deadline = arrival + period
+                abs_deadline[i] = tick + tasks[i].period;
             }
-            tasks[0].time_left = tasks[0].exec_time;
         }
-        if (tick % 10 == 0) {
-            if (tasks[1].time_left > 0) {
-                cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task 2 ***" << endl;
-                edf_misses++;
+
+        // Pick the task with the EARLIEST (smallest) absolute deadline
+        int best = -1;
+        int earliest = 999999;
+
+        for (int i = 0; i < n; i++) {
+            if (tasks[i].time_left > 0 && abs_deadline[i] < earliest) {
+                best = i;
+                earliest = abs_deadline[i];
             }
-            tasks[1].time_left = tasks[1].exec_time;
-        }
-        if (tick % 20 == 0) {
-            if (tasks[2].time_left > 0) {
-                cout << "  [Tick " << tick << "] *** DEADLINE MISS: Task 3 ***" << endl;
-                edf_misses++;
-            }
-            tasks[2].time_left = tasks[2].exec_time;
         }
 
-        // --- CALCULATE each task's absolute deadline ---
-        // The deadline for each task instance is the END of its current period.
-        // For Task 1 at tick 3: current period is [0,5), so deadline = 5.
-        // Formula: ((tick / period) + 1) * period
-        int deadline1 = ((tick / 5) + 1) * 5;
-        int deadline2 = ((tick / 10) + 1) * 10;
-        int deadline3 = ((tick / 20) + 1) * 20;
-
-        // --- PICK the task with the EARLIEST (smallest) deadline ---
-        int best = -1;             // Index of the task to run (-1 = idle)
-        int earliest = 999999;     // The smallest deadline found so far
-
-        if (tasks[0].time_left > 0 && deadline1 < earliest) {
-            best = 0; earliest = deadline1;
-        }
-        if (tasks[1].time_left > 0 && deadline2 < earliest) {
-            best = 1; earliest = deadline2;
-        }
-        if (tasks[2].time_left > 0 && deadline3 < earliest) {
-            best = 2; earliest = deadline3;
-        }
-
-        // --- EXECUTE the chosen task for 1 tick ---
         if (best != -1) {
             tasks[best].time_left--;
             cout << "  [Tick " << tick << "] Running Task " << tasks[best].id
-                 << "  (deadline=" << earliest << ")" << endl;
+                 << "  (deadline=" << abs_deadline[best] << ")" << endl;
         } else {
             cout << "  [Tick " << tick << "] IDLE" << endl;
         }
@@ -226,5 +243,5 @@ int main() {
     cout << "\nEDF Result: " << edf_misses << " deadline miss(es)" << endl;
     if (edf_misses == 0) cout << "All deadlines met!" << endl;
 
-    return 0;  // Program finished successfully
+    return 0;
 }

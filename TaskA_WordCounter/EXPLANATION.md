@@ -11,8 +11,6 @@ That's exactly what this program does:
 
 ---
 
-
-
 ## 🎯 The Big Picture
 
 ```
@@ -36,128 +34,94 @@ gcc -o word_counter word_counter.c
 ./word_counter file1.txt file2.txt file3.txt
 ```
 
+If no files are provided, it uses `sample1.txt` and `sample2.txt` by default.
+
 ---
 
-## 📖 Code Walkthrough — The Fun Version
+## 📖 Code Walkthrough
 
-### Part 1: The Word Counting Helper
+### Part 1: Dynamic File Input (Enhancement)
+
+```c
+int main(int argc, char *argv[]) {
+    if (argc > 1) {
+        // User provided files on the command line
+        num_files = argc - 1;
+        for (int i = 0; i < num_files; i++)
+            files[i] = argv[i + 1];
+    } else {
+        // Fall back to default sample files
+        files[0] = "sample1.txt";
+        files[1] = "sample2.txt";
+    }
+}
+```
+
+🎯 **Dynamic Tasks:** The user can specify ANY number of files (up to 10) via the command line. The program forks one child per file automatically. No hardcoding!
+
+---
+
+### Part 2: Error Reporting (-1 Through Pipe)
 
 ```c
 int count_words(const char *filename) {
-    FILE *fp = fopen(filename, "r");       // Open the essay
-    if (!fp) return -1;                     // Can't find it? Return -1 = "error!"
-
-    int count = 0;
-    char word[4096];
-
-    while (fscanf(fp, "%4095s", word) == 1) {   // Read one word at a time
-        count++;                                  // Tally it up
-    }
-
-    fclose(fp);
-    return count;    // "Teacher, I counted 500 words!"
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return -1;  // Error code! Sent through pipe to parent
+    // ... count words ...
+    return count;
 }
 ```
 
-🍎 **Think of `fscanf` like a kid reading a book word by word.** It skips spaces, tabs, and newlines automatically. Each time it finds a word, it says "got one!" and moves on. When there are no more words, it stops.
-
-**Why `%4095s`?** Imagine the word buffer is a box that fits 4096 letters. If we don't set a limit, a ridiculously long "word" (like 10,000 characters with no spaces) would overflow the box and crash the program. `%4095s` = "only grab up to 4095 letters" (leaving 1 spot for the `\0` terminator).
-
----
-
-### Part 2: Setting Up the Tubes (Pipes)
+🚨 **Error Reporting:** If a file doesn't exist, the child sends `-1` through the pipe instead of a word count. The parent checks for `-1` and reports the error:
 
 ```c
-int pipes[MAX_FILES][2];    // One tube per file
-pid_t pids[MAX_FILES];      // Remember each kid's ID
-```
-
-🧃 **Each pipe is like a juice box straw** — it has two ends:
-- `pipes[i][0]` = the **drinking end** (parent reads from here)
-- `pipes[i][1]` = the **pouring end** (child writes into here)
-
----
-
-### Part 3: The Magic of fork()
-
-```c
-for (int i = 0; i < num_files; i++) {
-    pipe(pipes[i]);        // Step 1: Make the tube FIRST
-    pids[i] = fork();      // Step 2: Clone yourself
-```
-
-🧬 **`fork()` is like a photocopier for programs.** You press the button and suddenly there are TWO identical copies of the program running at the same time. The original is the **parent**, the copy is the **child**.
-
-**How do you tell them apart?**
-- `fork()` returns `0` to the child → "I'm the copy!"
-- `fork()` returns the child's PID to the parent → "I made a copy, their ID is 12345"
-
-**Why `pipe()` BEFORE `fork()`?** Because `fork()` copies everything — including open pipe ends. If we create the pipe first, both parent and child automatically get access to the same tube. If we create the pipe after, only one of them has it!
-
----
-
-### Part 4: What the Kid Does
-
-```c
-if (pids[i] == 0) {
-    // I'm the child! 👶
-
-    close(pipes[i][0]);    // I don't need the drinking end, I only pour
-
-    // Close ALL other kids' tubes (very important!)
-    for (int j = 0; j < i; j++) {
-        close(pipes[j][0]);
-        close(pipes[j][1]);
-    }
-
-    int result = count_words(argv[i + 1]);           // Count words
-    write(pipes[i][1], &result, sizeof(result));      // Pour the answer into my tube
-
-    close(pipes[i][1]);    // Done pouring, close the tube
-    exit(0);               // "Bye teacher, I'm done!"
-}
-```
-
-🚰 **Why close other kids' tubes?** Imagine Kid 2 holds onto Kid 1's tube. When Kid 1 finishes and closes their tube, the parent tries to drink from it — but the OS says *"wait, Kid 2 still has the pouring end open, maybe more juice is coming!"* The parent waits forever. **Deadlock!** So every kid must close every tube they don't own.
-
----
-
-### Part 5: What the Teacher (Parent) Does
-
-```c
-close(pipes[i][1]);    // Close MY pouring end — I only drink!
-```
-
-☠️ **This one line prevents the #1 beginner mistake.** If the parent keeps the pouring end open, then when the parent tries to drink (`read()`), the OS thinks: *"Hey, the parent itself could pour more juice! Better wait..."* The parent waits on itself forever = **deadlock**.
-
-**Rule: Always close the pipe end you don't use. Always.**
-
----
-
-### Part 6: Collecting the Answers
-
-```c
-for (int i = 0; i < num_files; i++) {
-    int result = 0;
-    read(pipes[i][0], &result, sizeof(result));    // Drink from kid i's tube
+if (result == -1) {
+    printf("  %s : ERROR (file not found)\n", files[i]);
+    errors++;
+} else {
+    printf("  %s : %d words\n", files[i], result);
     total += result;
-    close(pipes[i][0]);                             // Done drinking, close it
 }
 ```
-
-**Why `read()` BEFORE `waitpid()`?** Imagine Kid 1 is trying to pour a LOT of juice but the tube is full (pipe buffer = 64KB). Kid 1 is stuck waiting for the parent to drink some. But the parent called `waitpid()` and is stuck waiting for Kid 1 to finish. Both are waiting on each other = **deadlock**. Reading first drains the tube so the kid can finish.
 
 ---
 
-### Part 7: Cleaning Up (No Zombies!)
+### Part 3: Dynamic fork() Loop
 
 ```c
 for (int i = 0; i < num_files; i++) {
-    waitpid(pids[i], &status, 0);    // "Kid i, are you done? OK, you can leave."
+    pipe(pipes[i]);      // Create pipe BEFORE fork
+    pids[i] = fork();    // Clone the process
+
+    if (pids[i] == 0) {
+        // Child: close unused pipe ends, count words, write result, exit
+        close(pipes[i][0]);
+        for (int j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); }
+        int result = count_words(files[i]);
+        write(pipes[i][1], &result, sizeof(result));
+        close(pipes[i][1]);
+        exit(0);
+    }
+    close(pipes[i][1]);  // Parent closes write end
 }
 ```
 
-🧟 **What's a zombie?** When a child process dies, it doesn't fully disappear. Its exit code stays in the OS like a ghost, waiting for the parent to acknowledge it. Until `waitpid()` is called, the dead child is a **zombie process** — using up a PID slot for nothing. `waitpid()` cleans it up.
+🧬 **`fork()` in a loop** creates one child per file dynamically. Each child gets its own pipe for sending results back. The key rules:
+- `pipe()` BEFORE `fork()` — so both parent and child share the pipe
+- Children close ALL other pipes — prevents deadlock
+- Parent closes write ends — so `read()` doesn't block forever
+
+---
+
+### Part 4: Zombie Prevention
+
+```c
+for (int i = 0; i < num_files; i++) {
+    waitpid(pids[i], &status, 0);
+}
+```
+
+🧟 **`waitpid()` cleans up dead children.** Without it, terminated child processes become "zombies" — dead processes still taking up PID slots.
 
 ---
 
@@ -170,4 +134,6 @@ for (int i = 0; i < num_files; i++) {
 | `waitpid()` | Teacher says "Kid, are you done?" and waits. Prevents zombies. |
 | Zombie | A dead process that hasn't been cleaned up yet. |
 | IPC | Any way for two processes to talk. Pipes are one type. |
-| Deadlock | Two people each waiting for the other to go first. Nobody moves. |
+| Deadlock | Two people each waiting for the other to go first. |
+| Error Code (-1) | Child sends -1 through pipe if file not found. Parent detects this. |
+| Dynamic Tasks | Number of children determined at runtime from command-line args. |

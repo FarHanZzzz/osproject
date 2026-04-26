@@ -6,12 +6,6 @@
 
 Imagine you're a **mischievous ghost** haunting someone's computer. Every few moments, you grab their mouse and nudge it a tiny bit in a random direction. The person is confused because they can't see you — you're invisible! The only way they can stop you is by saying the **magic words** (pressing Ctrl+Shift+Q).
 
-That's exactly what this program does:
-- **You (the ghost)** = the invisible background program
-- **Grabbing the mouse** = calling `SetCursorPos()` every 400ms
-- **Being invisible** = creating a hidden, message-only window
-- **Magic words** = a global hotkey registered with the OS
-
 ---
 
 ## 🎯 The Big Picture
@@ -19,6 +13,7 @@ That's exactly what this program does:
 ```
 Program starts
   │
+  ├── GetSystemMetrics() → Get actual screen dimensions
   ├── Create an INVISIBLE window (no taskbar, no icon, nothing)
   ├── Register Ctrl+Shift+Q as a "kill switch"
   ├── Start a timer that fires every 400 milliseconds
@@ -29,8 +24,6 @@ Program starts
         ├── Ctrl+Shift+Q pressed? → Shut down cleanly
         └── Anything else? → Ignore it, keep looping
 ```
-
-The program just sits there, invisible, endlessly waiting for events. Every 400ms, the timer event arrives and the mouse gets nudged.
 
 ---
 
@@ -48,11 +41,36 @@ elusive_cursor.exe
 # To stop: Press Ctrl + Shift + Q
 ```
 
+### How I Installed the Windows SDK
+
+1. **MinGW (GCC for Windows):** Downloaded from the official MinGW-w64 site and added to PATH
+2. **The Win32 API headers** (`windows.h`) come bundled with MinGW — no separate SDK install needed
+3. **Linking:** The `-lgdi32 -luser32` flags link the Windows graphics and user interface libraries
+4. **`-mwindows` flag:** Tells the compiler this is a GUI app (no console window)
+
 ---
 
-## 📖 Code Walkthrough — The Fun Version
+## 📖 Code Walkthrough
 
-### Part 1: The Event-Driven Model (Message Loop)
+### Part 1: Dynamic Screen Boundaries (GetSystemMetrics)
+
+```c
+screenWidth  = GetSystemMetrics(SM_CXSCREEN);
+screenHeight = GetSystemMetrics(SM_CYSCREEN);
+```
+
+📐 **Instead of hardcoding 1920x1080**, we ask the OS for the actual screen dimensions. `SM_CXSCREEN` returns the width, `SM_CYSCREEN` returns the height. This works on ANY monitor resolution.
+
+```c
+if (newX > screenWidth)  newX = screenWidth;
+if (newY > screenHeight) newY = screenHeight;
+```
+
+This prevents the cursor from flying off the screen edge regardless of the user's resolution.
+
+---
+
+### Part 2: The Event-Driven Model (Message Loop)
 
 ```c
 MSG msg;
@@ -61,75 +79,32 @@ while (GetMessage(&msg, NULL, 0, 0) > 0) {
 }
 ```
 
-📞 **Think of this as a call center receptionist.** The receptionist sits at their desk doing absolutely nothing until the phone rings. When it rings:
-1. `GetMessage()` picks up the phone (waits for an event)
-2. `DispatchMessage()` transfers the call to the right department (`WndProc`)
-3. The receptionist sits back down and waits for the next call
-
-The loop runs FOREVER until someone tells it to stop (via `PostQuitMessage()`), which makes `GetMessage()` return 0, ending the `while` loop.
-
-**Why is this better than polling?** Imagine the receptionist calling every department every second asking "got any work?" That wastes CPU. Instead, the receptionist sleeps until an event actually happens. This is called **event-driven programming** and it uses almost zero CPU.
+📞 **This is the heart of every Windows program.** `GetMessage()` waits for an event, `DispatchMessage()` routes it to `WndProc`. The loop runs forever until `PostQuitMessage()` is called.
 
 ---
 
-### Part 2: The Invisible Window
+### Part 3: The Invisible Window
 
 ```c
-HWND hwnd = CreateWindowExA(
-    0, "SimpleCursorClass", "Hidden", 0,
-    0, 0, 0, 0,
-    HWND_MESSAGE,    // ← THIS is the magic!
-    NULL, hInst, NULL
-);
+HWND hwnd = CreateWindowExA(0, "SimpleCursorClass", "Hidden", 0,
+    0, 0, 0, 0, HWND_MESSAGE, NULL, hInst, NULL);
 ```
 
-👻 **Why do we need a window at all?** Windows only sends messages (timer events, hotkey events) to **windows**. No window = no messages = our program is deaf. But we don't WANT a visible window. So we use `HWND_MESSAGE`, which creates a **message-only window** — it exists in memory but has no visual presence whatsoever. Not on the screen, not in the taskbar, not even in Alt+Tab!
-
-**Why register a window class first?** Every window in Windows must have a "class" that tells the OS which function handles its messages. Think of it like: "Before you can have a dog, the breed must exist." We register `SimpleCursorClass` as a breed, then create a dog of that breed.
+👻 **`HWND_MESSAGE` creates a message-only window** — invisible, not in taskbar, not in Alt+Tab. We need it only to receive timer and hotkey events.
 
 ---
 
-### Part 3: The Timer
+### Part 4: The Timer + Mouse Nudge
 
 ```c
-SetTimer(hwnd, 1, 400, NULL);
+SetTimer(hwnd, 1, 400, NULL);  // Fire WM_TIMER every 400ms
 ```
 
-⏰ **This tells Windows: "Hey, send me a `WM_TIMER` message every 400 milliseconds."** It's like setting an alarm that goes off repeatedly. Every time the alarm rings, our `WndProc` function wakes up and does its thing (move the mouse).
-
-**Why 400ms?** Fast enough to be annoying, slow enough that the user can still kinda use their computer. If it were 10ms, the mouse would be unusable. If it were 5000ms, the user might not even notice.
-
----
-
-### Part 4: The Mouse Nudge
-
-```c
-if (msg == WM_TIMER) {
-    POINT pt;
-    GetCursorPos(&pt);           // Where is the mouse right now?
-
-    int jumpX = (rand() % 51) - 25;   // Random number from -25 to +25
-    int jumpY = (rand() % 51) - 25;
-
-    int newX = pt.x + jumpX;
-    int newY = pt.y + jumpY;
-
-    // Don't let the mouse fly off the screen
-    if (newX < 0)    newX = 0;
-    if (newY < 0)    newY = 0;
-    if (newX > 1920) newX = 1920;
-    if (newY > 1080) newY = 1080;
-
-    SetCursorPos(newX, newY);    // MOVE IT!
-}
-```
-
-🎲 **The random math explained:**
-- `rand() % 51` gives a number from 0 to 50 (51 possible values)
-- Subtracting 25 shifts it to -25 to +25
-- So the mouse jumps up to 25 pixels in any direction — enough to be annoying, not enough to teleport across the screen
-
-**Why hardcode 1920x1080?** The "proper" way is to call `GetSystemMetrics(SM_CXSCREEN)` to ask Windows the actual screen size. We hardcoded it to keep the code dead simple and easy to explain. On a 1920x1080 monitor (which is the most common), this works perfectly.
+Every 400ms, `WndProc` receives `WM_TIMER` and:
+1. Gets current cursor position via `GetCursorPos()`
+2. Adds random offset (-25 to +25 pixels)
+3. Clamps to screen boundaries
+4. Moves cursor via `SetCursorPos()`
 
 ---
 
@@ -137,16 +112,21 @@ if (msg == WM_TIMER) {
 
 ```c
 RegisterHotKey(hwnd, 1, MOD_CONTROL | MOD_SHIFT, 'Q');
-
-// Inside WndProc:
-if (msg == WM_HOTKEY) {
-    PostQuitMessage(0);    // Tell the message loop to stop
-}
 ```
 
-🔑 **`RegisterHotKey` is a system-wide shortcut.** Unlike normal keyboard shortcuts that only work when your app is focused, this one works from ANYWHERE on the desktop. Even if you're in Chrome or playing a game, pressing Ctrl+Shift+Q will send a `WM_HOTKEY` message to our invisible window.
+🔑 **System-wide hotkey.** Works from anywhere — even if you're in another app. Pressing Ctrl+Shift+Q sends `WM_HOTKEY`, which calls `PostQuitMessage(0)` to end the message loop gracefully.
 
-`PostQuitMessage(0)` doesn't kill the program directly. It puts a `WM_QUIT` message into the queue, which causes `GetMessage()` to return 0 on the next loop, which gracefully ends the `while` loop.
+---
+
+## Key Win32 API Functions Used
+
+| Function | Purpose |
+|----------|---------|
+| `SetCursorPos(x, y)` | Forcefully move the mouse to (x, y) |
+| `GetCursorPos(&point)` | Get the current mouse position |
+| `SetTimer()` | Create a repeating timer event |
+| `GetSystemMetrics()` | Get screen dimensions dynamically |
+| `RegisterHotKey()` | Register a global keyboard shortcut |
 
 ---
 
@@ -154,13 +134,11 @@ if (msg == WM_HOTKEY) {
 
 | Thing | ELI5 Version |
 |-------|-------------|
-| Message Loop | A receptionist sitting at a desk, waiting for the phone to ring. Picks up, transfers the call, waits for the next one. |
-| `WndProc` | The "department" that handles the call. Checks what type of event it is and reacts. |
-| `HWND_MESSAGE` | An invisible room. Messages can be delivered here, but nobody can see the room. |
-| `SetTimer()` | An alarm clock that rings every N milliseconds and sends a `WM_TIMER` event. |
-| `SetCursorPos()` | Teleport the mouse to exact (x, y) coordinates on screen. |
-| `RegisterHotKey()` | Register a keyboard shortcut that works globally, even when the app isn't focused. |
-| Event-Driven | Instead of constantly checking "anything happen?", you sleep until something DOES happen. Saves CPU. |
-| `WM_TIMER` | A message that means "your timer alarm just went off!" |
-| `WM_HOTKEY` | A message that means "the user pressed your registered hotkey!" |
-| `PostQuitMessage()` | Doesn't kill the app instantly. It tells the message loop to end gracefully on the next cycle. |
+| Message Loop | A receptionist waiting for the phone to ring. Picks up, transfers, waits. |
+| `WndProc` | The department that handles each call (event). |
+| `HWND_MESSAGE` | An invisible room. Messages arrive but nobody can see it. |
+| `SetTimer()` | An alarm clock that rings every N milliseconds. |
+| `GetSystemMetrics()` | Asks the OS "how big is the screen?" — works on any resolution. |
+| `SetCursorPos()` | Teleport the mouse to exact coordinates. |
+| `RegisterHotKey()` | A global keyboard shortcut that works even when app isn't focused. |
+| Event-Driven | Sleep until something happens. Much more efficient than polling. |

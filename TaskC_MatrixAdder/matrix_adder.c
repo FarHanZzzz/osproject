@@ -2,155 +2,176 @@
 // Task C — Parallel Matrix Adder using pthreads
 // ============================================================
 // PROBLEM (from PDF): Add two large matrices (A + B = C) using
-// multiple threads to speed up the computation. Each thread
-// should handle a portion of the rows independently.
+// multiple threads to speed up the computation.
 //
-// HOW WE SOLVE IT:
-//   1. Create two 1000x1000 matrices (A and B) filled with data.
-//   2. Create exactly 4 threads.
-//   3. Each thread is assigned exactly 250 rows (1000 / 4 = 250).
-//   4. Each thread adds A[i][j] + B[i][j] and stores it in C[i][j]
-//      for its assigned rows ONLY.
-//   5. Because threads work on DIFFERENT rows, there is no conflict
-//      and NO locks/mutexes are needed.
-//   6. The main thread waits for all 4 to finish, then prints results.
+// ENHANCEMENTS:
+//   - Dynamic Threading: User inputs thread count via command
+//     line (e.g., ./matrix_add 8). Default is 4 threads.
+//   - Remainder Handling: If rows aren't evenly divisible by
+//     thread count, the last thread handles the extra rows.
+//   - Performance Testing: Use `time ./matrix_add 1` vs
+//     `time ./matrix_add 4` to compare speedup.
 //
 // Compile: gcc -o matrix_add matrix_adder.c -lpthread
-// Run:     ./matrix_add
+// Run:     ./matrix_add         (uses 4 threads)
+//          ./matrix_add 8       (uses 8 threads)
+//          time ./matrix_add 1  (benchmark with 1 thread)
 // ============================================================
 
-#include <stdio.h>    // For printf
-#include <stdlib.h>   // For general utilities
-#include <pthread.h>  // For pthread_create, pthread_join (threading library)
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
 
-// The size of our matrices: 1000 rows x 1000 columns
 #define ROWS 1000
 #define COLS 1000
+#define MAX_THREADS 16
 
 // ----------------------------------------------------------
-// GLOBAL MATRICES
+// GLOBAL MATRICES (shared by all threads)
 // ----------------------------------------------------------
-// We declare these outside of any function (globally) for two reasons:
-//   1. They are too large for the stack (1000*1000*4 bytes = ~4MB each).
-//   2. Global variables are shared by ALL threads automatically,
-//      so every thread can read A, B and write to C without
-//      needing pipes or any other communication mechanism.
-int A[ROWS][COLS];  // First input matrix
-int B[ROWS][COLS];  // Second input matrix
-int C[ROWS][COLS];  // Result matrix (A + B)
+// Declared globally because:
+//   1. Too large for the stack (~4MB each)
+//   2. All threads can access them without pipes or IPC
+int A[ROWS][COLS];
+int B[ROWS][COLS];
+int C[ROWS][COLS];
 
 // ----------------------------------------------------------
 // THREAD ARGUMENT STRUCT
 // ----------------------------------------------------------
-// This is like a "sticky note" we hand to each thread.
-// It tells the thread: "You are responsible for rows
-// from start_row to end_row."
+// Each thread gets a "sticky note" telling it which rows
+// to process. start_row is inclusive, end_row is exclusive.
 typedef struct {
-    int start_row;  // First row this thread works on (inclusive)
-    int end_row;    // Last row this thread works on (exclusive)
+    int thread_id;
+    int start_row;
+    int end_row;
 } ThreadArgs;
 
 // ----------------------------------------------------------
 // THREAD FUNCTION: add_rows
 // ----------------------------------------------------------
-// This is the function that each thread executes.
-// All 4 threads run this function simultaneously, but each
-// one receives a different ThreadArgs telling it which rows to process.
-// Because they work on different rows, they never step on each other!
+// Each thread adds A[i][j] + B[i][j] = C[i][j] for its
+// assigned rows ONLY. No two threads touch the same rows,
+// so NO locks/mutexes are needed.
 void *add_rows(void *arg) {
-    // Cast the generic void* pointer back to our ThreadArgs struct
     ThreadArgs *t = (ThreadArgs *)arg;
 
-    // Loop through ONLY the rows assigned to this thread
     for (int i = t->start_row; i < t->end_row; i++) {
-        // For each column in this row...
         for (int j = 0; j < COLS; j++) {
-            // Add the corresponding elements from A and B,
-            // and store the result in C
             C[i][j] = A[i][j] + B[i][j];
         }
     }
 
-    return NULL;  // Thread is done — return nothing
+    return NULL;
 }
 
 // ----------------------------------------------------------
 // MAIN FUNCTION
 // ----------------------------------------------------------
-int main() {
-    printf("=== Parallel Matrix Adder (4 Threads, 1000x1000) ===\n\n");
+int main(int argc, char *argv[]) {
+    // ======================================================
+    // STEP 1: Determine thread count (Dynamic Threading)
+    // ======================================================
+    // User can specify thread count via command line.
+    // Default is 4 threads if no argument provided.
+    int num_threads = 4;  // default
+
+    if (argc > 1) {
+        num_threads = atoi(argv[1]);
+        if (num_threads < 1) num_threads = 1;
+        if (num_threads > MAX_THREADS) num_threads = MAX_THREADS;
+    }
+
+    printf("=== Parallel Matrix Adder (%d Thread(s), %dx%d) ===\n\n",
+           num_threads, ROWS, COLS);
 
     // ======================================================
-    // STEP 1: Fill the matrices with dummy data
+    // STEP 2: Fill the matrices with dummy data
     // ======================================================
-    // We fill A with all 1s and B with all 2s.
-    // So every element of C should be 3 (1 + 2 = 3).
-    // This makes it easy to verify correctness!
     printf("Filling matrices A (all 1s) and B (all 2s)...\n");
     for (int i = 0; i < ROWS; i++) {
         for (int j = 0; j < COLS; j++) {
-            A[i][j] = 1;  // Every element of A is 1
-            B[i][j] = 2;  // Every element of B is 2
+            A[i][j] = 1;
+            B[i][j] = 2;
         }
     }
 
     // ======================================================
-    // STEP 2: Create thread variables and argument "sticky notes"
+    // STEP 3: Calculate row chunks with remainder handling
     // ======================================================
-    // We hardcode exactly 4 threads.
-    // 1000 rows / 4 threads = 250 rows per thread.
-    pthread_t thread1, thread2, thread3, thread4;
+    // If 1000 rows / 3 threads = 333 rows each, with 1 leftover.
+    // The last thread handles the extra rows (333 + 1 = 334).
+    int rows_per_thread = ROWS / num_threads;
+    int remainder = ROWS % num_threads;
 
-    // Each ThreadArgs tells a thread which rows to handle:
-    //   Thread 1: rows   0 to 249
-    //   Thread 2: rows 250 to 499
-    //   Thread 3: rows 500 to 749
-    //   Thread 4: rows 750 to 999
-    ThreadArgs args1 = {0,   250};
-    ThreadArgs args2 = {250, 500};
-    ThreadArgs args3 = {500, 750};
-    ThreadArgs args4 = {750, 1000};
+    pthread_t threads[MAX_THREADS];
+    ThreadArgs args[MAX_THREADS];
 
-    // ======================================================
-    // STEP 3: Launch all 4 threads
-    // ======================================================
-    // pthread_create() starts a new thread.
-    // Arguments:
-    //   &thread1   = where to store the thread handle
-    //   NULL       = default thread attributes
-    //   add_rows   = the function the thread will execute
-    //   &args1     = the argument to pass to the function
-    printf("Launching 4 threads...\n");
-    printf("  Thread 1: rows   0 - 249\n");
-    printf("  Thread 2: rows 250 - 499\n");
-    printf("  Thread 3: rows 500 - 749\n");
-    printf("  Thread 4: rows 750 - 999\n\n");
+    printf("Launching %d threads...\n", num_threads);
 
-    pthread_create(&thread1, NULL, add_rows, &args1);
-    pthread_create(&thread2, NULL, add_rows, &args2);
-    pthread_create(&thread3, NULL, add_rows, &args3);
-    pthread_create(&thread4, NULL, add_rows, &args4);
+    int current_row = 0;
+    for (int i = 0; i < num_threads; i++) {
+        args[i].thread_id = i + 1;
+        args[i].start_row = current_row;
 
-    // ======================================================
-    // STEP 4: Wait for all 4 threads to finish
-    // ======================================================
-    // pthread_join() blocks the main thread until the specified
-    // thread finishes its work. This is similar to waitpid()
-    // that we used for child processes in Task A.
-    pthread_join(thread1, NULL);
-    pthread_join(thread2, NULL);
-    pthread_join(thread3, NULL);
-    pthread_join(thread4, NULL);
+        // Last thread gets the remainder rows
+        if (i == num_threads - 1) {
+            args[i].end_row = ROWS;  // includes any leftover rows
+        } else {
+            args[i].end_row = current_row + rows_per_thread;
+        }
+
+        printf("  Thread %d: rows %4d - %4d (%d rows)\n",
+               args[i].thread_id,
+               args[i].start_row,
+               args[i].end_row - 1,
+               args[i].end_row - args[i].start_row);
+
+        current_row = args[i].end_row;
+    }
+
+    if (remainder > 0) {
+        printf("  (Thread %d handles %d extra remainder row(s))\n",
+               num_threads, remainder);
+    }
+    printf("\n");
 
     // ======================================================
-    // STEP 5: Verify the results
+    // STEP 4: Launch all threads
     // ======================================================
-    // Since A = all 1s and B = all 2s, every C[i][j] should be 3.
+    for (int i = 0; i < num_threads; i++) {
+        pthread_create(&threads[i], NULL, add_rows, &args[i]);
+    }
+
+    // ======================================================
+    // STEP 5: Wait for all threads to finish
+    // ======================================================
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    // ======================================================
+    // STEP 6: Verify the results
+    // ======================================================
     printf("All threads finished! Verifying results...\n");
     printf("  C[0][0]     = %d  (expected 3)\n", C[0][0]);
     printf("  C[500][500] = %d  (expected 3)\n", C[500][500]);
     printf("  C[999][999] = %d  (expected 3)\n", C[999][999]);
-    printf("\nDone! Matrix addition complete.\n");
 
-    return 0;  // Program finished successfully
+    // Full verification
+    int correct = 1;
+    for (int i = 0; i < ROWS && correct; i++) {
+        for (int j = 0; j < COLS && correct; j++) {
+            if (C[i][j] != 3) correct = 0;
+        }
+    }
+    printf("  Full verification: %s\n", correct ? "ALL CORRECT" : "ERRORS FOUND");
+
+    printf("\nDone! Matrix addition complete.\n");
+    printf("\nPerformance Testing Tip:\n");
+    printf("  time ./matrix_add 1   (single-threaded baseline)\n");
+    printf("  time ./matrix_add 4   (4 threads)\n");
+    printf("  time ./matrix_add 8   (8 threads)\n");
+
+    return 0;
 }

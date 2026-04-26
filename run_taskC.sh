@@ -2,17 +2,17 @@
 # ============================================
 # Task C — Parallel Matrix Adder
 # ============================================
-# This script compiles and runs the Matrix Adder program.
-# It uses 4 pthreads to add two 1000x1000 matrices in parallel.
+# This script compiles and runs the matrix adder.
+# It demonstrates dynamic threading and performance comparison.
 
 TASK_DIR="TaskC_MatrixAdder"
 
-echo "============================="
+echo "==============================="
 echo " Task C: Parallel Matrix Adder"
-echo "============================="
+echo "==============================="
 echo ""
 
-echo "Compiling matrix_adder.c..."
+echo "Compiling..."
 gcc -o "$TASK_DIR/matrix_add" "$TASK_DIR/matrix_adder.c" -lpthread
 
 if [ $? -ne 0 ]; then
@@ -20,6 +20,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Compilation successful!"
+echo "Build successful!"
 echo ""
-./"$TASK_DIR/matrix_add"
+
+echo "--- Run with 4 threads (default) ---"
+./"$TASK_DIR"/matrix_add
+echo ""
+
+echo "--- Run with 3 threads (remainder handling demo) ---"
+./"$TASK_DIR"/matrix_add 3

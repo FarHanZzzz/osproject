@@ -2,17 +2,17 @@
 # ============================================
 # Task A — Word Counter
 # ============================================
-# This script compiles and runs the Word Counter program.
-# It uses fork() and pipe() to count words in sample1.txt and sample2.txt.
+# This script compiles and runs the word counter.
+# It demonstrates dynamic file input and error reporting.
 
 TASK_DIR="TaskA_WordCounter"
 
-echo "============================="
+echo "==============================="
 echo " Task A: Word Counter"
-echo "============================="
+echo "==============================="
 echo ""
 
-echo "Compiling word_counter.c..."
+echo "Compiling..."
 gcc -o "$TASK_DIR/word_counter" "$TASK_DIR/word_counter.c"
 
 if [ $? -ne 0 ]; then
@@ -20,9 +20,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Compilation successful!"
+echo "Build successful!"
 echo ""
 
-# Run from inside the task directory so it can find sample1.txt and sample2.txt
+echo "--- Test 1: Default files (no arguments) ---"
 cd "$TASK_DIR"
 ./word_counter
+echo ""
+
+echo "--- Test 2: Custom files with error reporting ---"
+./word_counter sample1.txt sample2.txt nonexistent.txt
+cd ..
