@@ -14,75 +14,77 @@ Real operating systems categorize processes. A system process (like the kernel) 
 
 ## 💬 How To Explain The Problem (Your Opening Line)
 
-> *"The problem is that different types of processes have different priority needs. System processes are urgent, interactive processes need quick responses, and batch jobs can wait. One queue with one algorithm doesn't work for all of them. My MLQ scheduler divides CPU time: Q1 gets 50% and uses Round Robin, Q2 gets 30% and uses SJF, Q3 gets 20% and uses FCFS. This cycles repeatedly until all processes finish."*
+> *"The problem is that different types of processes have different priority needs. We used an ELI5 analogy of a Teacher helping Students. Group 1 (System) is urgent, Group 2 (Interactive) needs quick responses, and Group 3 (Batch) can wait. My MLQ scheduler divides the Teacher's time: Group 1 gets 50% (Round Robin), Group 2 gets 30% (SJF), and Group 3 gets 20% (FCFS). This cycles repeatedly until all students are helped."*
 
 ---
 
 ## ⚙️ How Your Code Solves It — Step By Step
 
-### Step 1 — Process Struct (From PDF)
-The PDF specifies exactly this struct:
+### Step 1 — Student (Process) Struct
+The code represents a Process as a `Student` waiting for the Teacher:
 ```cpp
-struct Process {
-    int pid;
-    int arrival_time;
-    int burst_time;
-    int remaining_time;
-    int priority;  // 0-10=Q1, 11-20=Q2, 21-30=Q3
+struct Student {
+    int id;               
+    int arrival_time;     
+    int total_time_needed;
+    int time_left;        
+    int priority_score;   // 0-10=Group1, 11-20=Group2, 21-30=Group3
+    int first_helped_time;
+    int finished_time;    
+    bool is_in_line;      
 };
 ```
-I added `start_time`, `finish_time`, and `activated` to track metrics and arrivals.
 
 ### Step 2 — Queue Assignment by Priority
-- Priority 0–10 → Q1 (System)
-- Priority 11–20 → Q2 (Interactive)
-- Priority 21–30 → Q3 (Batch)
-- Processes enter their queue only when their `arrival_time` is reached
+- Priority 0–10 → Group 1 (System)
+- Priority 11–20 → Group 2 (Interactive)
+- Priority 21–30 → Group 3 (Batch)
+- Students enter their line only when their `arrival_time` is reached
 
 ### Step 3 — The Time Slice Cycle
-Every cycle of the scheduler:
-1. **Q1 gets 5 ticks (50%)** — uses Round Robin with quantum=2
-2. **Q2 gets 3 ticks (30%)** — uses Shortest Job First
-3. **Q3 gets 2 ticks (20%)** — uses First Come First Served
-4. Repeat from Q1
+Every cycle of the teacher's time:
+1. **Group 1 gets 5 minutes (50%)** — uses Round Robin with cycle limit=2
+2. **Group 2 gets 3 minutes (30%)** — uses Shortest Job First
+3. **Group 3 gets 2 minutes (20%)** — uses First Come First Served
+4. Repeat from Group 1
 
-### Step 4 — Round Robin (Q1)
-- Take process from front of queue
-- Run it for `min(2, budget, remaining_time)` ticks
-- If not done → push to BACK of queue (the "rotating" part of Round Robin)
-- If done → mark finish_time, increment completed
+### Step 4 — Round Robin (Group 1)
+- Take student from front of line
+- Help them for `min(2, allowed_time, time_left)` minutes
+- If not done → push to BACK of line (the "rotating" part of Round Robin)
+- If done → mark finish_time, increment completed students
 
-### Step 5 — Shortest Job First (Q2)
-- Scan all processes in Q2
-- Pick the one with the SMALLEST `remaining_time`
-- Run it until done or budget exhausted
-- If not done → push back to Q2
+### Step 5 — Shortest Job First (Group 2)
+- Scan all students in Group 2 line
+- Pick the one with the SMALLEST `time_left`
+- Help them until done or allowed time exhausted
+- If not done → keep them in line
 
-### Step 6 — First Come First Served (Q3)
-- Always take the process at the FRONT
-- Run until done or budget exhausted
-- If not done → push back to FRONT (so it continues next cycle)
+### Step 6 — First Come First Served (Group 3)
+- Always take the student at the FRONT
+- Help until done or allowed time exhausted
+- If not done → push back to FRONT (so they continue next cycle)
 
 ### Step 7 — Dynamic Arrivals
-- `activate_arrivals()` is called after every tick
-- Any process whose `arrival_time <= current_time` gets added to its queue
-- This means processes can arrive mid-simulation and get picked up correctly
+- `check_for_new_arrivals()` is called after every minute of teaching
+- Any student whose `arrival_time <= current_minute` gets added to their line
+- This means students can walk in mid-simulation and get picked up correctly
 
 ### Step 8 — Metrics and Gantt Chart
-- **Waiting Time** = Turnaround − Burst = (finish − arrival) − burst
+- **Waiting Time** = Turnaround − Time Needed = (finish − arrival) − total_time_needed
 - **Turnaround Time** = finish_time − arrival_time
-- **Response Time** = start_time − arrival_time
-- **Gantt Chart**: array of PIDs run at each tick, printed as a bar chart
+- **Response Time** = first_helped_time − arrival_time
+- **Timeline**: an array of Student IDs helped at each minute, printed as a timeline
 
 ---
 
 ## 🔥 Challenges & What You'd Say You Faced
 
-> *"The hardest part was handling the interaction between the budget system and Round Robin. In classic Round Robin, you run until quantum expires or process finishes. But here, Q1's total budget is 5 ticks for the whole queue — not per process. I had to use `min(quantum, budget, remaining_time)` to respect all three limits simultaneously."*
+> *"The hardest part was handling the interaction between the time budget and Round Robin. In classic Round Robin, you run until the quantum expires or process finishes. But here, Group 1's total budget is 5 minutes for the whole group — not per student. I had to calculate `minutes_to_talk` based on three limits simultaneously."*
 
-> *"Dynamic arrivals were also tricky. A process with `arrival_time=2` should not enter Q1 until tick 2. I solved this with an `activate_arrivals()` helper that's called after every single tick. It scans all processes and moves any newly arrived ones into their queues."*
+> *"Dynamic arrivals were also tricky. A student arriving at minute 2 should not be in line until minute 2. I solved this with a `check_for_new_arrivals()` helper that's called constantly. It scans the classroom and moves any newly arrived students into their lines."*
 
-> *"For FCFS in Q3, when a process isn't finished after the budget runs out, it must go back to the FRONT of the queue (not the back). If it went to the back, other processes that arrived later would jump ahead — violating the "first come" principle. I use `push_front()` on the deque for this."*
+> *"For FCFS in Group 3, when a student isn't finished after the budget runs out, they must stay at the FRONT of the line (not the back). If they went to the back, other students that arrived later would jump ahead — violating the "first come" principle. I use `push_front()` on the deque for this."*
 
 ---
 
@@ -91,10 +93,10 @@ Every cycle of the scheduler:
 | Choice | Why |
 |--------|-----|
 | `deque<int>` instead of `queue<int>` | Deque allows both `push_front` and `push_back` — needed for FCFS back-insertion |
-| Store indices, not Process objects, in queues | Updating `remaining_time` in the queue directly isn't possible; indices let us modify the original `procs` vector |
-| `activate_arrivals()` called every tick | Ensures processes are detected as soon as they arrive, even mid-cycle |
-| `min({2, budget, remaining_time})` | Three-way min with initializer list — cleaner than nested `if` |
-| `start_time = -1` initially | Sentinel value: tells us the process hasn't gotten CPU yet (needed for Response Time) |
+| Store indices, not Student objects, in lines | Updating `time_left` in the line directly isn't possible; indices let us modify the original `classroom` vector |
+| `check_for_new_arrivals()` called every minute | Ensures students are detected as soon as they walk in |
+| Teacher/Student Analogy | Makes it trivially easy to explain standard MLQ algorithms to non-experts |
+| `first_helped_time = -1` initially | Sentinel value: tells us the student hasn't gotten help yet (needed for Response Time) |
 
 ---
 
@@ -129,9 +131,9 @@ Every cycle of the scheduler:
 
 | Metric | Formula | Meaning |
 |--------|---------|---------|
-| **Waiting Time** | Finish − Arrival − Burst | Time spent in queue, not running |
-| **Turnaround Time** | Finish − Arrival | Total time from arrival to completion |
-| **Response Time** | First CPU − Arrival | Delay before the process first gets the CPU |
+| **Waiting Time** | Finish − Arrival − Total Needed | Time spent standing in line, not getting help |
+| **Turnaround Time** | Finish − Arrival | Total time from walking in to going home |
+| **Response Time** | First Help − Arrival | Delay before the student gets any help at all |
 
 ### Gantt Chart
 - A timeline showing which process was running at each tick
@@ -161,10 +163,10 @@ Every cycle of the scheduler:
 > Response time is how long until the process FIRST gets the CPU — important for interactive apps. Waiting time is the total time spent NOT running. A process can have a short response time but a long waiting time if it runs briefly early but then waits a long time before finishing.
 
 **Q: How do processes get assigned to queues?**
-> By their priority number. Priority 0–10 goes to Q1, 11–20 to Q2, 21–30 to Q3. The function `get_queue(priority)` handles this mapping. Once assigned, a process stays in its queue forever — it cannot "upgrade" or "downgrade" between queues.
+> By their priority score. Priority 0–10 goes to Group 1, 11–20 to Group 2, 21–30 to Group 3. The function `get_group_number(priority)` handles this mapping. Once assigned, they stay in that group.
 
 **Q: What happens if a queue runs out of budget before all its processes finish?**
-> The unfinished processes stay in the queue. The scheduler moves on to the next queue in the cycle. Those processes will get more CPU time when the cycle comes back to their queue.
+> The unfinished students stay in their line. The Teacher moves on to the next group in the cycle. Those students will get more time when the teacher circles back to their group.
 
 **Q: What if ALL queues are empty but some processes haven't arrived yet?**
 > The scheduler runs an IDLE tick, advancing time by 1, then calls `activate_arrivals()` to check if any new processes have arrived. This prevents an infinite loop.

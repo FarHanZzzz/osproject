@@ -13,7 +13,7 @@ echo "============================="
 echo ""
 
 echo "Compiling mlq_scheduler.cpp..."
-g++ -o "$TASK_DIR/mlq_scheduler" "$TASK_DIR/mlq_scheduler.cpp"
+g++ -std=c++11 -o "$TASK_DIR/mlq_scheduler" "$TASK_DIR/mlq_scheduler.cpp"
 
 if [ $? -ne 0 ]; then
     echo "Compilation FAILED!"

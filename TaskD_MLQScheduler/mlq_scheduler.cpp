@@ -1,367 +1,322 @@
-// ============================================================
-// Task D — Time-Sliced Multilevel Queue (MLQ) Scheduler
-// ============================================================
-//
-// THE PROBLEM:
-//   Real operating systems have many types of processes running
-//   at once: system processes (critical, must run fast), interactive
-//   processes (user apps, must feel responsive), and batch processes
-//   (background jobs, no rush). A single queue cannot serve all of
-//   these fairly. We need MULTIPLE QUEUES with different rules.
-//
-// THE SOLUTION — Time-Sliced MLQ:
-//   We divide CPU time among 3 queues in fixed proportions.
-//   Every "cycle" the CPU gives:
-//     Q1 (System):      5 ticks = 50% of CPU time, uses Round Robin
-//     Q2 (Interactive): 3 ticks = 30% of CPU time, uses Shortest Job First
-//     Q3 (Batch):       2 ticks = 20% of CPU time, uses First Come First Served
-//   Then it loops back to Q1 and repeats.
-//
-// PROCESS-TO-QUEUE ASSIGNMENT (by priority number from the PDF):
-//   Priority  0-10  → Q1 (System)
-//   Priority 11-20  → Q2 (Interactive)
-//   Priority 21-30  → Q3 (Batch)
-//
-// ALGORITHMS:
-//   Round Robin (Q1): Each process gets a max of 2 ticks (quantum),
-//     then moves to the BACK of the queue. Fair time-sharing.
-//   Shortest Job First (Q2): The process with the SMALLEST remaining
-//     time runs first. Minimizes average waiting time.
-//   First Come First Served (Q3): Processes run in the order they
-//     arrived. Simplest possible algorithm.
-//
-// KEY METRICS (required by the PDF):
-//   Waiting Time    = Completion Time - Arrival Time - Burst Time
-//   Turnaround Time = Completion Time - Arrival Time
-//   Response Time   = Time of first CPU access - Arrival Time
-//
-// Compile: g++ -o mlq_scheduler mlq_scheduler.cpp
-// Run:     ./mlq_scheduler
-// ============================================================
+/*
+ * ELI5: Time-Sliced Multilevel Queue (The Fair Teacher)
+ * ------------------------------------------------------
+ * Imagine a teacher with three groups of students.
+ * Group 1: Urgent questions (50% of time) - Round Robin (Teacher cycles through them quickly)
+ * Group 2: Medium questions (30% of time) - Shortest Job First (Quickest questions go first)
+ * Group 3: Slow projects    (20% of time) - First Come, First Served (Answer in order)
+ * 
+ * The teacher splits their time so everyone gets attention without anyone waiting forever!
+ */
 
-#include <iostream>   // cout, endl — for printing output
-#include <vector>     // vector<> — resizable array for the process list
-#include <deque>      // deque<> — double-ended queue (efficient front/back ops)
-#include <algorithm>  // min() — finds the smaller of two values
-#include <iomanip>    // setw() — controls column width for neat table formatting
-using namespace std;
+#include <algorithm> // For basic data operations
+#include <deque>     // A double-ended line (queue) of people
+#include <iomanip>   // For making our printed tables look neat
+#include <iostream>  // For printing to the screen
+#include <string>    // For handling text
+#include <vector>    // An expandable list
 
-// ----------------------------------------------------------
-// PROCESS STRUCT — one object per process in the simulation
-// ----------------------------------------------------------
-// This is the "process control block" (PCB) equivalent.
-// Every field that the PDF's struct definition requires is here.
-// ----------------------------------------------------------
-struct Process {
-    int pid;           // Process ID — unique identifier (1, 2, 3...)
-    int arrival_time;  // When this process first appears in the system (tick)
-    int burst_time;    // TOTAL CPU time this process needs to complete
-    int remaining_time;// How much CPU time is still needed (counts DOWN to 0)
-    int priority;      // Determines which queue: 0-10=Q1, 11-20=Q2, 21-30=Q3
-    int start_time;    // The first tick this process ever got the CPU (-1 = not yet)
-    int finish_time;   // The tick when this process finished (-1 = not done yet)
-    bool activated;    // Has this process been moved into its queue yet? (starts false)
+// [OS CONCEPT: Process Control Block (PCB)]
+// In an OS, the PCB stores all information about a specific process. Our "Student" struct
+// acts exactly like a PCB, holding their ID, arrival time, and execution state.
+// A "Student" represents a computer Process waiting for the CPU (the Teacher)
+struct Student {
+    int id;               // Student's ID number
+    int arrival_time;     // The exact minute they walked in
+    int total_time_needed;// Total minutes they need with the teacher
+    int time_left;        // Minutes they STILL need (starts equal to total_time_needed)
+    int priority_score;   // Decides their group (0-10 = Group 1, 11-20 = Group 2, etc.)
+    int first_helped_time;// The minute the teacher first talked to them (-1 means not yet)
+    int finished_time;    // The minute their question was completely answered (-1 means not yet)
+    bool is_in_line;      // Are they currently standing in one of the 3 lines?
 };
 
-// ----------------------------------------------------------
-// HELPER: get_queue
-// ----------------------------------------------------------
-// Given a priority number, returns which queue (1, 2, or 3)
-// the process belongs to, according to the PDF's priority ranges.
-// ----------------------------------------------------------
-int get_queue(int priority) {
-    if (priority <= 10) return 1;  // Priority 0-10:  Queue 1 (System)
-    if (priority <= 20) return 2;  // Priority 11-20: Queue 2 (Interactive)
-    return 3;                       // Priority 21-30: Queue 3 (Batch)
+// [OS CONCEPT: Priority-Based Queue Assignment]
+// The OS checks the priority score to decide which queue (Group) the process belongs to.
+// Helper to decide which group a student belongs to based on their priority score
+int get_group_number(int priority_score) {
+    if (priority_score <= 10) return 1; // High priority = Group 1
+    if (priority_score <= 20) return 2; // Medium priority = Group 2
+    return 3;                           // Low priority = Group 3
+}
+
+// [OS CONCEPT: Job Scheduler / Process Admission]
+// The OS constantly checks if new processes have arrived and adds them to the ready queues.
+// Check the classroom door to see if any new students just arrived
+void check_for_new_arrivals(
+    std::vector<Student> &classroom, 
+    int current_minute, 
+    std::deque<int> &group1, 
+    std::vector<int> &group2, 
+    std::deque<int> &group3) 
+{
+    // Look at every student in the classroom
+    for (size_t i = 0; i < classroom.size(); i++) {
+        // If they aren't in line yet, still need help, AND they have arrived...
+        if (!classroom[i].is_in_line && classroom[i].time_left > 0 && classroom[i].arrival_time <= current_minute) {
+            
+            // Figure out which group they belong to
+            int group = get_group_number(classroom[i].priority_score);
+            
+            // Put them in the correct line
+            if (group == 1) group1.push_back((int)i);
+            else if (group == 2) group2.push_back((int)i);
+            else group3.push_back((int)i);
+            
+            // Mark them as officially standing in line
+            classroom[i].is_in_line = true;
+        }
+    }
+}
+
+// [OS CONCEPT: CPU Execution & Time Slicing]
+// The CPU executes a process for a unit of time (1 tick/minute).
+// The teacher spends exactly 1 minute helping a specific student
+void help_student_for_one_minute(std::vector<Student> &classroom, int student_index, int &current_minute, std::vector<int> &timeline_record) {
+    // If this is the VERY FIRST time the teacher is talking to them, record the time
+    if (classroom[student_index].first_helped_time == -1) {
+        classroom[student_index].first_helped_time = current_minute;
+    }
+    
+    // They need 1 minute less of help now
+    classroom[student_index].time_left--;
+    
+    // Write down in our logbook that we helped this student this minute
+    timeline_record.push_back(classroom[student_index].id);
+    
+    // Time moves forward by 1 minute
+    current_minute++;
+}
+
+// [OS CONCEPT: Round Robin (RR) Scheduling]
+// Processes take turns. Each gets a strict maximum time slice (quantum) before going to the back of the queue.
+// Group 1: Round Robin (The teacher cycles through students quickly)
+bool teach_group1(
+    std::vector<Student> &classroom, std::deque<int> &group1, std::vector<int> &timeline, 
+    int &time, int max_time_allowed, int cycle_limit, int &students_finished, 
+    std::vector<int> &group2, std::deque<int> &group3) 
+{
+    int time_spent = 0;
+    bool helped_someone = false;
+
+    // Keep going until we run out of allowed time OR the line is empty
+    while (time_spent < max_time_allowed && !group1.empty()) {
+        int current_student = group1.front(); // Get the first person in line
+        group1.pop_front();                   // Remove them from the front
+
+        // Figure out how long to talk to them (either cycle limit, time left, or max allowed time)
+        int minutes_to_talk = cycle_limit;
+        if (minutes_to_talk > max_time_allowed - time_spent) minutes_to_talk = max_time_allowed - time_spent;
+        if (minutes_to_talk > classroom[current_student].time_left) minutes_to_talk = classroom[current_student].time_left;
+
+        // Help them for the calculated minutes
+        for (int i = 0; i < minutes_to_talk; i++) {
+            help_student_for_one_minute(classroom, current_student, time, timeline);
+            time_spent++;
+            helped_someone = true;
+            // Check if anyone new walked in while we were talking
+            check_for_new_arrivals(classroom, time, group1, group2, group3);
+        }
+
+        // Are they completely done?
+        if (classroom[current_student].time_left == 0) {
+            classroom[current_student].finished_time = time;
+            classroom[current_student].is_in_line = false;
+            students_finished++;
+        } else {
+            // Not done yet? Go to the back of the line!
+            group1.push_back(current_student);
+        }
+    }
+    return helped_someone;
+}
+
+// [OS CONCEPT: Shortest Job First (SJF) Scheduling]
+// The OS scans the queue and executes the process that requires the least remaining time.
+// Group 2: Shortest Job First (The teacher picks the quickest question to answer first)
+bool teach_group2(
+    std::vector<Student> &classroom, std::vector<int> &group2, std::vector<int> &timeline, 
+    int &time, int max_time_allowed, int &students_finished, 
+    std::deque<int> &group1, std::deque<int> &group3) 
+{
+    int time_spent = 0;
+    bool helped_someone = false;
+
+    while (time_spent < max_time_allowed && !group2.empty()) {
+        // Look through the whole line to find the person with the shortest question
+        int best_person_index = 0;
+        for (size_t i = 1; i < group2.size(); i++) {
+            if (classroom[group2[i]].time_left < classroom[group2[best_person_index]].time_left) {
+                best_person_index = i;
+            }
+        }
+
+        int current_student = group2[best_person_index];
+
+        // Figure out how long to talk to them
+        int minutes_to_talk = classroom[current_student].time_left;
+        if (minutes_to_talk > max_time_allowed - time_spent) minutes_to_talk = max_time_allowed - time_spent;
+
+        // Help them!
+        for (int i = 0; i < minutes_to_talk; i++) {
+            help_student_for_one_minute(classroom, current_student, time, timeline);
+            time_spent++;
+            helped_someone = true;
+            check_for_new_arrivals(classroom, time, group1, group2, group3);
+        }
+
+        // Are they completely done?
+        if (classroom[current_student].time_left == 0) {
+            classroom[current_student].finished_time = time;
+            classroom[current_student].is_in_line = false;
+            students_finished++;
+            // Remove them from the line
+            group2.erase(group2.begin() + best_person_index);
+        }
+    }
+    return helped_someone;
+}
+
+// [OS CONCEPT: First Come, First Served (FCFS) Scheduling]
+// The simplest scheduling: processes are executed exactly in the order they arrived.
+// Group 3: First Come, First Served (The teacher just answers in the order they arrived)
+bool teach_group3(
+    std::vector<Student> &classroom, std::deque<int> &group3, std::vector<int> &timeline, 
+    int &time, int max_time_allowed, int &students_finished, 
+    std::deque<int> &group1, std::vector<int> &group2) 
+{
+    int time_spent = 0;
+    bool helped_someone = false;
+
+    while (time_spent < max_time_allowed && !group3.empty()) {
+        int current_student = group3.front(); // Just take the first person in line
+
+        // Figure out how long to talk to them
+        int minutes_to_talk = classroom[current_student].time_left;
+        if (minutes_to_talk > max_time_allowed - time_spent) minutes_to_talk = max_time_allowed - time_spent;
+
+        // Help them!
+        for (int i = 0; i < minutes_to_talk; i++) {
+            help_student_for_one_minute(classroom, current_student, time, timeline);
+            time_spent++;
+            helped_someone = true;
+            check_for_new_arrivals(classroom, time, group1, group2, group3);
+        }
+
+        // Are they completely done?
+        if (classroom[current_student].time_left == 0) {
+            classroom[current_student].finished_time = time;
+            classroom[current_student].is_in_line = false;
+            students_finished++;
+            group3.pop_front(); // Remove from the front of the line
+        }
+    }
+    return helped_someone;
 }
 
 int main() {
-    cout << "=== Time-Sliced MLQ Scheduler ===" << endl;
-    cout << "Q1 (Round Robin, quantum=2):   5 ticks/cycle (50%)" << endl;
-    cout << "Q2 (Shortest Job First):       3 ticks/cycle (30%)" << endl;
-    cout << "Q3 (First Come First Served):  2 ticks/cycle (20%)" << endl;
-    cout << endl;
-
-    // ======================================================
-    // STEP 1: Define the process set with arrival times
-    // ======================================================
-    // Each entry: {pid, arrival_time, burst_time, remaining_time,
-    //              priority, start_time, finish_time, activated}
-    // We initialize start_time and finish_time to -1 (= "not happened yet")
-    // remaining_time starts equal to burst_time (full work left to do)
-    // activated starts false (process hasn't entered any queue yet)
-    vector<Process> procs = {
-        {1, 0, 5, 5, 5,  -1, -1, false},  // P1: arrives at t=0, needs 5 ticks, Q1
-        {2, 1, 3, 3, 8,  -1, -1, false},  // P2: arrives at t=1, needs 3 ticks, Q1
-        {3, 0, 6, 6, 15, -1, -1, false},  // P3: arrives at t=0, needs 6 ticks, Q2
-        {4, 2, 2, 2, 12, -1, -1, false},  // P4: arrives at t=2, needs 2 ticks, Q2
-        {5, 0, 4, 4, 25, -1, -1, false},  // P5: arrives at t=0, needs 4 ticks, Q3
-        {6, 3, 3, 3, 22, -1, -1, false},  // P6: arrives at t=3, needs 3 ticks, Q3
+    // ---- Define our classroom of students ----
+    // id, arrival_time, total_time_needed, time_left, priority_score, first_helped, finished, in_line
+    std::vector<Student> classroom = {
+        {1,  0,  7,  7,   5,  -1, -1, false},   // High Priority (Group 1)
+        {2,  1,  4,  4,  12,  -1, -1, false},   // Med Priority (Group 2)
+        {3,  2,  8,  8,  25,  -1, -1, false},   // Low Priority (Group 3)
+        {4,  3,  5,  5,   8,  -1, -1, false},   // High Priority (Group 1)
+        {5,  5,  3,  3,  18,  -1, -1, false},   // Med Priority (Group 2)
+        {6,  6,  6,  6,  27,  -1, -1, false}    // Low Priority (Group 3)
     };
 
-    int n = procs.size(); // Total number of processes
+    // The teacher's rules for splitting a 10-minute period
+    const int group1_time_allowed  = 5;   // Group 1 gets 5 minutes (50%)
+    const int group2_time_allowed  = 3;   // Group 2 gets 3 minutes (30%)
+    const int group3_time_allowed  = 2;   // Group 3 gets 2 minutes (20%)
+    const int group1_cycle_limit   = 2;   // Group 1 students only get 2 mins before going to back of line
 
-    // Print the initial process table so the user can see what we're scheduling
-    cout << "Processes:" << endl;
-    cout << "  PID  Priority  Queue  Arrival  Burst" << endl;
-    cout << "  ---  --------  -----  -------  -----" << endl;
-    for (auto &p : procs) {
-        // auto &p = reference to each Process in the vector (no copying)
-        cout << "   " << p.pid
-             << "      " << setw(2) << p.priority  // setw(2) = pad to 2 chars wide
-             << "      Q" << get_queue(p.priority)
-             << "       " << p.arrival_time
-             << "       " << p.burst_time << endl;
-    }
-    cout << endl;
+    int clock_time = 0;
+    int students_finished = 0;
+    std::vector<int> timeline; // A log of who the teacher was helping every minute
 
-    // ======================================================
-    // STEP 2: Set up the three separate queues
-    // ======================================================
-    // Each deque stores INDICES into the procs[] vector (not the Process objects).
-    // We use indices so we can update procs[idx].remaining_time etc. easily.
-    // deque = double-ended queue: efficient push_back (to back) and pop_front (from front).
-    deque<int> q1, q2, q3;
+    std::deque<int>  group1_line;
+    std::vector<int> group2_line;
+    std::deque<int>  group3_line;
 
-    // Gantt chart: stores the PID that ran at each clock tick.
-    // Example: gantt[0]=1 means "at tick 0, process P1 ran".
-    // 0 in the gantt = idle (no process was ready).
-    vector<int> gantt;
+    // [OS CONCEPT: Multilevel Queue (MLQ) Scheduler]
+    // The main loop represents the OS short-term scheduler continuously choosing which queue 
+    // to service based on their allotted time budgets.
+    // ---- The School Day Loop ----
+    // Keep running until every single student is finished
+    while (students_finished < (int)classroom.size()) {
+        
+        // See who is waiting at the door right now
+        check_for_new_arrivals(classroom, clock_time, group1_line, group2_line, group3_line);
 
-    int current_time = 0; // The simulation clock, starts at tick 0
-    int completed = 0;    // How many processes have finished (stopping condition)
+        bool teacher_was_busy = false;
+        
+        // The teacher spends their allotted time on each group in order
+        teacher_was_busy = teach_group1(classroom, group1_line, timeline, clock_time, group1_time_allowed, group1_cycle_limit, students_finished, group2_line, group3_line) || teacher_was_busy;
+        teacher_was_busy = teach_group2(classroom, group2_line, timeline, clock_time, group2_time_allowed, students_finished, group1_line, group3_line) || teacher_was_busy;
+        teacher_was_busy = teach_group3(classroom, group3_line, timeline, clock_time, group3_time_allowed, students_finished, group1_line, group2_line) || teacher_was_busy;
 
-    // ----------------------------------------------------------
-    // LAMBDA: activate_arrivals
-    // ----------------------------------------------------------
-    // A lambda is an inline anonymous function (C++11 feature).
-    // [&] means it captures all local variables by reference.
-    // This function scans all processes and moves any that have
-    // arrived by current_time into their correct queue.
-    // We call this at the start AND after every tick (new arrivals mid-sim).
-    // ----------------------------------------------------------
-    auto activate_arrivals = [&]() {
-        for (int i = 0; i < n; i++) {
-            // Check: process not yet activated AND it has arrived by now
-            if (!procs[i].activated && procs[i].arrival_time <= current_time) {
-                procs[i].activated = true;              // Mark as activated (don't add twice)
-                int ql = get_queue(procs[i].priority);  // Which queue does it belong to?
-                if (ql == 1) q1.push_back(i);           // Add index to Q1
-                else if (ql == 2) q2.push_back(i);      // Add index to Q2
-                else q3.push_back(i);                   // Add index to Q3
-            }
-        }
-    };
-
-    // ----------------------------------------------------------
-    // LAMBDA: run_one_tick
-    // ----------------------------------------------------------
-    // Runs process at index idx for exactly ONE clock tick:
-    //   1. Records start_time if this is the process's first CPU access.
-    //   2. Decrements remaining_time by 1.
-    //   3. Appends the PID to the Gantt chart.
-    //   4. Advances the clock.
-    //   5. Activates any newly arrived processes.
-    // ----------------------------------------------------------
-    auto run_one_tick = [&](int idx) {
-        if (procs[idx].start_time == -1)
-            procs[idx].start_time = current_time; // Record first-time CPU access (for Response Time)
-        procs[idx].remaining_time--;               // One tick of CPU work done
-        gantt.push_back(procs[idx].pid);           // Record this PID in the Gantt chart
-        current_time++;                            // Advance the simulation clock
-        activate_arrivals();                        // Check if any process just arrived
-    };
-
-    // Activate processes that arrive at time 0 before the main loop starts
-    activate_arrivals();
-
-    cout << "=== Execution Timeline ===" << endl;
-
-    // ======================================================
-    // STEP 3: The Main Scheduling Loop
-    // ======================================================
-    // We keep running cycles (Q1→Q2→Q3→Q1→...) until all n
-    // processes have completed (completed == n).
-    while (completed < n) {
-        bool any_work = false; // Track if ANY queue did work this cycle
-                               // (if not, all queues are empty → idle tick)
-
-        // --------------------------------------------------
-        // QUEUE 1: Round Robin (Budget = 5 ticks, Quantum = 2)
-        // --------------------------------------------------
-        // Round Robin: Each process gets AT MOST 2 ticks (quantum).
-        // After 2 ticks (or when it finishes), it goes to the BACK of Q1.
-        // The budget (5) limits the total ticks Q1 can use this cycle.
-        {
-            int budget = 5; // Q1 gets 5 ticks this cycle (50% of a 10-tick cycle)
-
-            while (budget > 0 && !q1.empty()) {
-                any_work = true;
-
-                int idx = q1.front(); // Take the process at the FRONT of Q1
-                q1.pop_front();       // Remove it from the front of the queue
-
-                // Run for: min(quantum=2, remaining budget, remaining process time)
-                // min() ensures we don't over-run on any of the three limits
-                int ticks = min({2, budget, procs[idx].remaining_time});
-
-                for (int i = 0; i < ticks; i++) {
-                    cout << "  [t=" << current_time << "] Q1 (RR)   -> P"
-                         << procs[idx].pid << endl;
-                    run_one_tick(idx); // Run for 1 tick
-                    budget--;         // Deduct from Q1's budget
-                }
-
-                if (procs[idx].remaining_time == 0) {
-                    // Process is done!
-                    procs[idx].finish_time = current_time; // Record completion time
-                    completed++;                           // One more process done
-                    cout << "  *** P" << procs[idx].pid << " FINISHED ***" << endl;
-                } else {
-                    q1.push_back(idx); // NOT done yet: send to BACK of queue (Round Robin!)
-                }
-            }
-        }
-
-        // --------------------------------------------------
-        // QUEUE 2: Shortest Job First (Budget = 3 ticks)
-        // --------------------------------------------------
-        // SJF: Among all processes currently in Q2, pick the one
-        // with the SMALLEST remaining_time and run it until it
-        // finishes or the budget runs out. Then re-sort and pick again.
-        {
-            int budget = 3; // Q2 gets 3 ticks this cycle (30% of a 10-tick cycle)
-
-            while (budget > 0 && !q2.empty()) {
-                any_work = true;
-
-                // Scan Q2 to find the index (si) of the process with shortest remaining time
-                int si = 0; // Assume the first element is the shortest initially
-                for (int i = 1; i < (int)q2.size(); i++) {
-                    // If q2[i]'s remaining_time is less than current shortest, update si
-                    if (procs[q2[i]].remaining_time < procs[q2[si]].remaining_time)
-                        si = i;
-                }
-
-                int idx = q2[si];             // Index into procs[] of the shortest job
-                q2.erase(q2.begin() + si);    // Remove it from its position in the deque
-
-                // Run for min(budget, remaining time) — can't exceed either
-                int ticks = min(budget, procs[idx].remaining_time);
-                for (int i = 0; i < ticks; i++) {
-                    cout << "  [t=" << current_time << "] Q2 (SJF)  -> P"
-                         << procs[idx].pid << endl;
-                    run_one_tick(idx); // Run for 1 tick
-                    budget--;          // Deduct from Q2's budget
-                }
-
-                if (procs[idx].remaining_time == 0) {
-                    procs[idx].finish_time = current_time; // Record completion
-                    completed++;
-                    cout << "  *** P" << procs[idx].pid << " FINISHED ***" << endl;
-                } else {
-                    q2.push_back(idx); // Not done — return to BACK of Q2
-                }
-            }
-        }
-
-        // --------------------------------------------------
-        // QUEUE 3: First Come First Served (Budget = 2 ticks)
-        // --------------------------------------------------
-        // FCFS: The process that arrived EARLIEST (front of queue)
-        // runs until it finishes or budget runs out. No reordering.
-        {
-            int budget = 2; // Q3 gets 2 ticks this cycle (20% of a 10-tick cycle)
-
-            while (budget > 0 && !q3.empty()) {
-                any_work = true;
-
-                int idx = q3.front(); // Always take from the FRONT (arrival order)
-                q3.pop_front();       // Remove from front
-
-                int ticks = min(budget, procs[idx].remaining_time);
-                for (int i = 0; i < ticks; i++) {
-                    cout << "  [t=" << current_time << "] Q3 (FCFS) -> P"
-                         << procs[idx].pid << endl;
-                    run_one_tick(idx);
-                    budget--;
-                }
-
-                if (procs[idx].remaining_time == 0) {
-                    procs[idx].finish_time = current_time;
-                    completed++;
-                    cout << "  *** P" << procs[idx].pid << " FINISHED ***" << endl;
-                } else {
-                    q3.push_front(idx); // FCFS: put back at FRONT (same process continues next cycle)
-                }
-            }
-        }
-
-        // If all three queues were empty but processes still haven't arrived,
-        // advance time by one idle tick and check for new arrivals.
-        if (!any_work && completed < n) {
-            cout << "  [t=" << current_time << "] IDLE" << endl;
-            gantt.push_back(0); // 0 = idle in the Gantt chart
-            current_time++;
-            activate_arrivals(); // Maybe a process arrives now
+        // If all the lines were completely empty, the teacher just waits 1 minute
+        if (!teacher_was_busy) {
+            timeline.push_back(-1); // -1 means teacher was drinking coffee (idle)
+            clock_time++;
         }
     }
 
-    // ======================================================
-    // STEP 4: Print the Gantt Chart
-    // ======================================================
-    // Format: | P1 | P1 | P2 | P3 | P4 | ...
-    //         0    1    2    3    4    5  ...
-    cout << endl << "=== Gantt Chart ===" << endl << "  |";
-    for (int i = 0; i < (int)gantt.size(); i++) {
-        if (gantt[i] == 0) cout << " -- |"; // Idle tick
-        else cout << " P" << gantt[i] << " |"; // Running process PID
+    // ---- Print the Timeline (Gantt Chart) ----
+    std::cout << "Timeline of who the teacher helped every minute ('-' = drinking coffee):\n";
+    for (size_t t = 0; t < timeline.size(); t++) {
+        if (timeline[t] == -1) std::cout << "- ";
+        else std::cout << "S" << timeline[t] << " ";
     }
-    cout << endl << "  ";
-    // Print tick numbers below the chart (time axis)
-    for (int i = 0; i <= (int)gantt.size(); i++) {
-        cout << setw(4) << i << " "; // setw(4) = align each number in 4 char wide column
-    }
-    cout << endl;
+    std::cout << "\n\n";
 
-    // ======================================================
-    // STEP 5: Print Performance Metrics (required by PDF)
-    // ======================================================
-    // For each process, calculate and display:
-    //   Waiting Time    = Turnaround - Burst = (finish-arrival) - burst
-    //   Turnaround Time = finish_time - arrival_time
-    //   Response Time   = start_time  - arrival_time
-    cout << endl << "=== Performance Metrics ===" << endl;
-    cout << "  PID  Queue  Arrival  Burst  Finish  Waiting  Turnaround  Response" << endl;
-    cout << "  ---  -----  -------  -----  ------  -------  ----------  --------" << endl;
+    // ---- Print the final Report Card ----
+    std::cout << std::left
+              << std::setw(6)  << "ID"
+              << std::setw(7)  << "Group"
+              << std::setw(8)  << "Arrived"
+              << std::setw(8)  << "Needed"
+              << std::setw(9)  << "Finished"
+              << std::setw(9)  << "Wait"
+              << std::setw(12) << "Turnaround"
+              << std::setw(10) << "Response"
+              << "\n";
 
-    double total_wt = 0, total_tat = 0, total_rt = 0; // Accumulators for averages
+    double total_wait = 0, total_turnaround = 0, total_response = 0;
 
-    for (auto &p : procs) {
-        int turnaround = p.finish_time - p.arrival_time; // Total time process was in system
-        int waiting    = turnaround - p.burst_time;      // Time spent waiting (not running)
-        int response   = p.start_time - p.arrival_time;  // Delay before first CPU access
+    for (const auto &student : classroom) {
+        // Math to calculate how good/bad the waiting was
+        int turnaround = student.finished_time - student.arrival_time; // Total time spent in classroom
+        int waiting    = turnaround - student.total_time_needed;       // Time spent just standing in line
+        int response   = student.first_helped_time - student.arrival_time; // Time before teacher FIRST said hello
 
-        total_wt  += waiting;     // Accumulate for average
-        total_tat += turnaround;  // Accumulate for average
-        total_rt  += response;    // Accumulate for average
+        std::string group_name = "G" + std::to_string(get_group_number(student.priority_score));
 
-        cout << "   " << p.pid
-             << "     Q" << get_queue(p.priority)
-             << "       " << p.arrival_time
-             << "       " << p.burst_time
-             << "      " << setw(2) << p.finish_time
-             << "       " << setw(2) << waiting
-             << "          " << setw(2) << turnaround
-             << "         " << response << endl;
+        std::cout << std::left
+                  << std::setw(6)  << student.id
+                  << std::setw(7)  << group_name
+                  << std::setw(8)  << student.arrival_time
+                  << std::setw(8)  << student.total_time_needed
+                  << std::setw(9)  << student.finished_time
+                  << std::setw(9)  << waiting
+                  << std::setw(12) << turnaround
+                  << std::setw(10) << response
+                  << "\n";
+
+        total_wait += waiting;
+        total_turnaround += turnaround;
+        total_response += response;
     }
 
-    cout << endl;
-    // Divide totals by n to get per-process averages
-    cout << "  Avg Waiting Time:    " << fixed << setprecision(2) << total_wt / n << endl;
-    cout << "  Avg Turnaround Time: " << fixed << setprecision(2) << total_tat / n << endl;
-    cout << "  Avg Response Time:   " << fixed << setprecision(2) << total_rt / n << endl;
+    // Print class averages
+    int total_students = (int)classroom.size();
+    std::cout << "\nClass Averages:\n";
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "  Avg Waiting Time    : " << total_wait / total_students << " minutes\n";
+    std::cout << "  Avg Turnaround Time : " << total_turnaround / total_students << " minutes\n";
+    std::cout << "  Avg Response Time   : " << total_response / total_students << " minutes\n";
 
-    cout << endl << "All " << n << " processes finished at time t=" << current_time << endl;
-    return 0;
+    return 0; // School day is over!
 }
