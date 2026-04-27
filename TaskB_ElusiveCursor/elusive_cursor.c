@@ -27,6 +27,8 @@
 //   gcc -o elusive_cursor.exe elusive_cursor.c -lgdi32 -luser32 -mwindows
 // ============================================================
 
+// [OS CONCEPT: System APIs / Win32 API] 
+// The OS provides functions (system calls/APIs) to interact with the system.
 #include <windows.h>  // Master Win32 API header: HWND, POINT, MSG, WM_TIMER etc.
 #include <stdlib.h>   // For rand() — generates random integers
 #include <time.h>     // For time() — seeds the random number generator
@@ -43,9 +45,14 @@ int screenHeight;  // Monitor height in pixels (e.g., 1080)
 // Windows calls it automatically whenever an event occurs.
 // msg tells us WHAT happened; wParam/lParam carry extra details.
 // ----------------------------------------------------------
+// [OS CONCEPT: Callbacks & Event Handlers]
+// This is a CALLBACK function — we never call it directly. The Operating System 
+// calls it for us when hardware (timer/keyboard) triggers an event.
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
+    // [OS CONCEPT: Asynchronous Events & Interrupts]
     // --- WM_TIMER fires every 400ms (set up by SetTimer below) ---
+    // Similar to a hardware interrupt, the OS signals our process periodically.
     if (msg == WM_TIMER) {
         POINT pt;                   // Win32 struct: holds {pt.x, pt.y} pixel coords
         GetCursorPos(&pt);          // Fills pt with the cursor's current screen position
@@ -82,52 +89,52 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 // ----------------------------------------------------------
 // WinMain — Entry point for Windows GUI programs (replaces main)
 // ----------------------------------------------------------
+// [OS CONCEPT: Process Entry Point]
+// Every process managed by the OS needs an entry point. For Windows GUI apps, it's WinMain.
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
-    // Seed rand() with current time so jumps are different each run
+    // 1. Prepare for randomness
+    // We use the current time as a seed so the cursor jumps randomly every time we run the app.
     srand((unsigned int)time(NULL));
 
-    // === STEP 1: Get screen dimensions with GetSystemMetrics() ===
-    // SM_CXSCREEN = screen width in pixels  (works on any monitor resolution)
-    // SM_CYSCREEN = screen height in pixels
+    // 2. Find out how big the screen is
+    // We need the width and height so we know the boundaries where the cursor can jump.
     screenWidth  = GetSystemMetrics(SM_CXSCREEN);
     screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
-    // === STEP 2: Register a Window Class (blueprint for our window) ===
-    WNDCLASSA wc = {0};               // Zero-initialize all fields
-    wc.lpfnWndProc   = WndProc;       // Our event handler function
-    wc.hInstance     = hInst;         // Associate with this application
-    wc.lpszClassName = "CursorClass"; // Unique name for this class
-    RegisterClassA(&wc);              // Register blueprint with Windows
+    // 3. Create a blueprint for our invisible window
+    // Every Windows program needs a "Window", even if we don't show it on the screen.
+    WNDCLASSA wc = {0};               
+    wc.lpfnWndProc   = WndProc;       // Tell Windows: "Send all events to the WndProc function"
+    wc.hInstance     = hInst;         // Tie this blueprint to our application
+    wc.lpszClassName = "CursorClass"; // Give our blueprint a name
+    RegisterClassA(&wc);              // Save the blueprint
 
-    // === STEP 3: Create a message-only HIDDEN window ===
-    // HWND_MESSAGE = special parent that makes the window invisible
-    // (no taskbar entry, no visible UI, just receives messages)
-    HWND hwnd = CreateWindowExA(
-        0, "CursorClass", "Hidden", 0, // No style, class name, title, no style flags
-        0, 0, 0, 0,                    // x, y, width, height all 0 (no visible area)
-        HWND_MESSAGE, NULL, hInst, NULL // Message-only parent, no menu
-    );
+    // 4. Build the actual invisible window
+    // [OS CONCEPT: OS Resources & Handles (HWND)]
+    // We ask the OS to allocate a resource (a Window) and it gives us a Handle (HWND) to reference it.
+    // HWND_MESSAGE tells Windows to make this window completely hidden (no taskbar icon, no visual).
+    HWND hwnd = CreateWindowExA(0, "CursorClass", "Hidden", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, hInst, NULL);
 
-    // === STEP 4: Register Ctrl+Shift+Q as a global hotkey ===
-    // This works even when our app is in the background.
-    // MOD_CONTROL | MOD_SHIFT = both Ctrl and Shift must be held
-    // 'Q' = the Q key. ID=1 is our arbitrary label for this hotkey.
+    // 5. Create a "Kill Switch"
+    // Register "Ctrl + Shift + Q" as a global shortcut. No matter what app is open, 
+    // pressing this will send a signal to our program to stop.
     RegisterHotKey(hwnd, 1, MOD_CONTROL | MOD_SHIFT, 'Q');
 
-    // === STEP 5: Start the jitter timer (fires every 400 ms) ===
-    // Every 400ms Windows will send WM_TIMER to our window.
-    // ID=1 is our arbitrary label for this timer.
+    // 6. Start the "Jitter" Timer
+    // Tell Windows: "Send an alarm to my window every 400 milliseconds."
     SetTimer(hwnd, 1, 400, NULL);
 
-    // === STEP 6: The Message Loop — keeps the program alive ===
-    // GetMessage blocks until an event arrives, fills the MSG struct.
-    // Returns > 0 for normal messages; returns 0 when WM_QUIT arrives.
-    // DispatchMessage routes each message to WndProc().
+    // 7. Keep the program alive (The Message Loop)
+    // Programs normally close instantly. This loop forces the program to stay open and listen for:
+    // - The 400ms timer alarm (to jump the cursor)
+    // - The Ctrl+Shift+Q shortcut (to close the program)
+    // [OS CONCEPT: The Message Queue & Inter-Process Communication (IPC)]
+    // The OS collects hardware events (mouse, keyboard, timers) and puts them in a queue for our process.
+    // GetMessage pulls them from the queue, blocking if empty (which saves CPU cycles).
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0) > 0) {
-        DispatchMessage(&msg); // Send event to WndProc() for handling
+        DispatchMessage(&msg); // Forward the event to our WndProc function to actually handle it
     }
-    // Ctrl+Shift+Q caused WM_QUIT → GetMessage returned 0 → loop exits
 
     return 0;
 }

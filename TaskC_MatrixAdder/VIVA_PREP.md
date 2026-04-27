@@ -40,12 +40,12 @@ This tests your understanding of:
 - The LAST thread always gets `rows_per_thread + remainder` rows
 
 ### Step 4 — Launch All Threads
-- `pthread_create(&threads[i], NULL, add_rows, &args[i])`
-- Each thread gets a `ThreadArgs` struct telling it its start_row and end_row
+- `workers.emplace_back(add_rows, args);`
+- Each thread gets a `WorkerArgs` struct telling it its start_row and end_row
 - All threads start nearly simultaneously
 
 ### Step 5 — Wait For All Threads
-- `pthread_join(threads[i], NULL)` — waits for thread i to finish
+- `w.join()` — waits for each worker thread to finish
 - Without this, main() might print results before threads are done computing
 
 ### Step 6 — Verify Results
@@ -56,7 +56,7 @@ This tests your understanding of:
 
 ## 🔥 Challenges & What You'd Say You Faced
 
-> *"The first challenge was understanding why the matrices are declared globally instead of inside main(). A 1000×1000 integer matrix is 4MB. The default thread stack is only 8MB. Putting three such matrices in main() would risk a stack overflow crash. Global variables live in the data segment, which has much more space."*
+> *"The first challenge was memory management. An 800×800 integer matrix is large. The default thread stack is limited (e.g., 8MB on Windows/Linux). If we allocated these arrays directly on the stack inside main, it could cause a stack overflow. Instead, we used `std::vector`, which safely allocates memory dynamically on the heap. Since all threads run in the same process, they share the heap and can access the matrices via pointers."*
 
 > *"The second challenge was figuring out the row distribution. When thread count doesn't divide evenly into the row count, you get a remainder. For example, 1000 / 3 = 333 remainder 1. If you just give every thread 333 rows, one row is never processed. My solution: the last thread always gets everything from its start_row to ROWS (the actual end), which automatically absorbs any remainder."*
 
@@ -68,12 +68,12 @@ This tests your understanding of:
 
 | Choice | Why |
 |--------|-----|
-| Global arrays A, B, C | Too large for stack; globals live in data segment with no size limit |
+| `std::vector` | Allocates matrices on the heap to avoid stack overflow while allowing shared access |
 | No mutexes/locks | Threads write to non-overlapping rows — no shared write targets = no race condition |
-| `ThreadArgs` struct | Clean way to pass multiple arguments to a thread (pthread_create only takes one arg) |
-| Last thread handles remainder | Simple, guaranteed to cover all rows without skipping any |
-| 1000×1000 matrix size | Large enough to show meaningful speedup in performance tests |
-| `pthread_join()` | Ensures main() waits for all results before verifying or printing |
+| `WorkerArgs` struct | Clean way to pass multiple arguments to a thread function |
+| Remainder logic | Simple, guaranteed to distribute extra rows evenly to cover all rows without skipping any |
+| 800×800 matrix size | Large enough to show meaningful speedup in performance tests |
+| `w.join()` | Ensures main() waits for all results before verifying or printing |
 
 ---
 
@@ -91,16 +91,15 @@ This tests your understanding of:
 > Threads are like workers in the same office sharing the same desk and files.
 > Processes are like workers in separate offices with their own desks.
 
-### `pthread_create()`
-- Creates a new thread that runs a specific function
-- `pthread_create(&tid, NULL, function, arg)`:
-  - `tid` = thread ID (output)
-  - `NULL` = default attributes
-  - `function` = the function the thread will execute
-  - `arg` = single argument passed to the function (must be `void*`)
+### `std::thread`
+- Modern C++ wrapper that creates a new OS-level thread to run a specific function
+- `workers.emplace_back(add_rows, args)`:
+  - Spawns a new thread executing `add_rows`
+  - Passes the `args` directly to the function
+  - Keeps a handle to the thread in the `workers` vector
 
-### `pthread_join()`
-- Makes the calling thread wait until the target thread finishes
+### `std::thread::join()`
+- Makes the calling thread (main) wait until the target thread finishes
 - Like `waitpid()` but for threads
 - Without it: main() exits while threads are still running → undefined behavior
 
@@ -132,14 +131,14 @@ This tests your understanding of:
 **Q: Why don't you need a mutex in this program?**
 > Because each thread writes to a completely separate range of rows in matrix C. Thread 1 writes rows 0–249, Thread 2 writes rows 250–499, and so on. Two threads never write to the same memory address, so there is no possibility of a data race.
 
-**Q: What would happen if you removed `pthread_join()`?**
-> The main function would reach the verification code before threads finish computing. You'd be reading garbage values from matrix C — whatever happened to be in memory before the threads wrote anything.
+**Q: What would happen if you removed `join()`?**
+> The main function would reach the verification code before threads finish computing. You'd be reading garbage values from the result matrix, or the program might abort entirely because the main thread exited while child threads were active.
 
-**Q: Why are the matrices global and not local variables in main?**
-> Three 1000×1000 int arrays = 3 × 4MB = 12MB total. The default stack size is typically 8MB. Declaring them locally in main would overflow the stack and crash the program. Global variables are stored in the data segment, which can handle this size.
+**Q: Why use `std::vector` instead of raw arrays inside main?**
+> Three 800×800 int arrays is very large. Declaring them locally as raw arrays in main would overflow the stack and crash the program. `std::vector` dynamically allocates its data on the heap, which has plenty of space and is shared among all threads.
 
-**Q: What is the ThreadArgs struct used for?**
-> `pthread_create` only lets you pass ONE argument to a thread function (as a `void*`). We need to pass multiple values: which thread it is, what row to start at, and what row to end at. We pack all these into a struct, and the thread unpacks it.
+**Q: What is the WorkerArgs struct used for?**
+> We need to pass multiple values to the thread: pointers to the matrices, what row to start at, and what row to end at. We pack all these into a `WorkerArgs` struct to keep the function signature clean and organized.
 
 **Q: How does the remainder row handling work?**
 > Integer division: 1000 / 3 = 333, remainder 1. The first two threads get 333 rows each. Instead of also giving the last thread 333 rows (which would skip row 999), we set its `end_row = ROWS` (= 1000), so it automatically gets rows 666–999 = 334 rows, covering the remainder.

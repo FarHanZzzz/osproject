@@ -13,7 +13,7 @@ echo "==============================="
 echo ""
 
 echo "Compiling..."
-gcc -o "$TASK_DIR/matrix_add" "$TASK_DIR/matrix_adder.c" -lpthread
+g++ -x c++ -std=c++11 -o "$TASK_DIR/matrix_add" "$TASK_DIR/matrix_adder.c" -pthread
 
 if [ $? -ne 0 ]; then
     echo "Compilation FAILED!"
