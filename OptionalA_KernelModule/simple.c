@@ -29,6 +29,13 @@
 //   View:     sudo dmesg | tail -5         (see the unload message + GCD result)
 //   Clean:    sudo dmesg -c               (clear the kernel log buffer)
 //
+// cd /home/farhan-sadeque/Downloads/Osproject/OptionalA_KernelModule
+// make
+// sudo insmod simple.ko
+// sudo dmesg | tail -5
+// sudo rmmod simple
+// sudo dmesg | tail -5
+//
 // THE TWO KERNEL-ONLY FEATURES THIS MODULE DEMONSTRATES:
 //   1. GOLDEN_RATIO_PRIME — a constant from <linux/hash.h> used in kernel
 //      hash tables. Only available inside the kernel, not in user programs.
@@ -80,7 +87,7 @@ static int __init simple_init(void) {
     return 0; // 0 means the module loaded successfully
               // Any other value means failure (module won't load)
 }
-
+  
 // ======================================================
 // MODULE EXIT FUNCTION — called when the module is removed
 // ======================================================

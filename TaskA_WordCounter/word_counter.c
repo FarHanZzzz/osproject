@@ -43,6 +43,11 @@
 // Run:     ./word_counter sample1.txt sample2.txt
 
 
+//cd /home/farhan-sadeque/Downloads/Osproject/TaskA_WordCounter
+//gcc -o word_counter word_counter.c
+//./word_counter sample1.txt sample2.txt
+
+
 #include <stdio.h>    // Gives us printf(), fopen(), fclose(), fscanf()
 #include <stdlib.h>   // Gives us exit() — used to terminate child processes
 #include <unistd.h>   // Gives us fork(), pipe(), read(), write(), getpid()

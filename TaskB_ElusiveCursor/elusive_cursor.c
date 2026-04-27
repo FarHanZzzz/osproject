@@ -25,6 +25,10 @@
 //
 // Compile (MinGW on Windows):
 //   gcc -o elusive_cursor.exe elusive_cursor.c -lgdi32 -luser32 -mwindows
+//
+// cd /home/farhan-sadeque/Downloads/Osproject/TaskB_ElusiveCursor
+// gcc -o elusive_cursor.exe elusive_cursor.c -lgdi32 -luser32 -mwindows
+// ./elusive_cursor.exe
 // ============================================================
 
 // [OS CONCEPT: System APIs / Win32 API] 

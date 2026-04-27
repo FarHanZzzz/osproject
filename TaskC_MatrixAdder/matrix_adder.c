@@ -7,6 +7,10 @@
  *
  * Usage:  ./matrix_add [number_of_threads]
  *         (defaults to 4 if omitted)
+ *
+ * cd /home/farhan-sadeque/Downloads/Osproject/TaskC_MatrixAdder
+ * g++ -x c++ -std=c++11 -o matrix_add matrix_adder.c -pthread
+ * ./matrix_add 4
  */
 
 #include <chrono>

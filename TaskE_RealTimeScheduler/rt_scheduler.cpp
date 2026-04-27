@@ -47,6 +47,10 @@
 //
 // Compile: g++ -o rt_scheduler rt_scheduler.cpp
 // Run:     ./rt_scheduler
+//
+// cd /home/farhan-sadeque/Downloads/Osproject/TaskE_RealTimeScheduler
+// g++ -o rt_scheduler rt_scheduler.cpp
+// ./rt_scheduler
 // ============================================================
 
 #include <iostream>  // cout, endl — for printing output
@@ -54,7 +58,7 @@
 #include <cmath>     // pow() — computes 2^(1/n) for the RM bound formula
 #include <iomanip>   // setprecision() — controls decimal places in output
 using namespace std;
-
+   
 // ----------------------------------------------------------
 // TASK STRUCT — represents one periodic real-time task
 // ----------------------------------------------------------
@@ -103,9 +107,10 @@ int lcm(int a, int b) {
 int main() {
     cout << "=== Real-Time Scheduler ===" << endl << endl;
 
-    // ======================================================
+    
     // STEP 1: Define the task set (exact values from PDF table)
-    // ======================================================
+    
+
     // {id, exec_time (Ci), period (Ti), time_left}
     // time_left starts at 0 — tasks are not "active" yet at tick 0
     // (they become active when their first period starts)

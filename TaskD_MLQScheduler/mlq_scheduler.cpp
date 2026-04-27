@@ -7,6 +7,10 @@
  * Group 3: Slow projects    (20% of time) - First Come, First Served (Answer in order)
  * 
  * The teacher splits their time so everyone gets attention without anyone waiting forever!
+ *
+ * cd /home/farhan-sadeque/Downloads/Osproject/TaskD_MLQScheduler
+ * g++ -std=c++11 -o mlq_scheduler mlq_scheduler.cpp
+ * ./mlq_scheduler
  */
 
 #include <algorithm> // Provides min(), sort() — basic operations on data
